@@ -522,6 +522,32 @@ async function send() {
         stopStreamId = null;
         await refreshSessions();
       },
+      onAborted: async () => {
+        // 流已开始但末段断开（多见于上线后外层代理未配 SSE）：后端通常已落库。
+        // 静默地用持久化结果收尾，避免误报「连接中断」；仅在确实拉不到答案时才退回报错。
+        if (!guard()) return;
+        toolHint.value = '';
+        activeStream = null;
+        clearToolTimer();
+        showAnswerNow.value = false;
+        stopStreamId = null;
+        const sid = activeSessionId.value;
+        try {
+          if (sid != null) {
+            const result = await getAiMessages(sid);
+            if (!guard()) return;
+            messages.value = result.list;
+          }
+        } catch {
+          /* 重载失败按下方逻辑统一处理 */
+        }
+        if (!guard()) return;
+        streaming.value = false;
+        const last = messages.value[messages.value.length - 1];
+        if (!(last && last.role === 'assistant' && last.content)) {
+          messageError.value = '连接中断，请重试。';
+        }
+      },
       onError: (msg) => {
         if (!guard()) return;
         toolHint.value = '';

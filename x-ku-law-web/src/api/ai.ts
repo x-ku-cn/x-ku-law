@@ -56,6 +56,12 @@ export interface AskHandlers {
   onDelta?: (text: string) => void;
   onDone?: (done: AskDone) => void;
   onError?: (message: string) => void;
+  /**
+   * 流在「已开始（收到过 meta/delta）但未收到 done」时异常断开：后端通常已在处理并极可能已落库，
+   * 故区别于 onError——调用方应静默地按持久化结果收尾（重新拉取会话消息）而非报错。
+   * 未提供时回退到 onError。
+   */
+  onAborted?: () => void;
 }
 
 export interface AskHandle {
@@ -73,6 +79,8 @@ export function askStream(payload: AskPayload, handlers: AskHandlers): AskHandle
 
   void (async () => {
     let doneReceived = false;
+    // 是否已收到过 meta/delta：用于在异常断开时区分「真错误」与「已开始、后端极可能已完成」。
+    let streamStarted = false;
     // 解析状态提到外层：连接异常关闭进 catch 时仍可 flush 残留 buffer，
     // 避免最后一个事件（尤其 done）因结尾空行与连接关闭在同一网络分包而丢失。
     let buffer = '';
@@ -91,6 +99,7 @@ export function askStream(payload: AskPayload, handlers: AskHandlers): AskHandle
         /* 非 JSON 时保留原始字符串 */
       }
       if (eventName === 'done') doneReceived = true;
+      if (eventName === 'meta' || eventName === 'delta') streamStarted = true;
       handleEvent(eventName, parsed, handlers);
       eventName = 'message';
       dataBuffer = '';
@@ -172,7 +181,12 @@ export function askStream(payload: AskPayload, handlers: AskHandlers): AskHandle
         /* 解析残留失败时忽略，按下方逻辑判断 */
       }
       if ((error as { name?: string })?.name !== 'AbortError' && !doneReceived) {
-        handlers.onError?.('连接中断，请重试。');
+        // 已开始（meta/delta 到达过）但连接末段丢失 done：后端极可能已落库，交由调用方按持久化结果收尾。
+        if (streamStarted && handlers.onAborted) {
+          handlers.onAborted();
+        } else {
+          handlers.onError?.('连接中断，请重试。');
+        }
       }
     }
   })();
