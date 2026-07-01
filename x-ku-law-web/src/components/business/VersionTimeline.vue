@@ -11,7 +11,7 @@
       <Diamond :size="9" />
       <div>
         <strong>{{ versionLabel(version) }}</strong>
-        <span>{{ version.effectiveDate || version.publishDate || '日期未标注' }}</span>
+        <span>{{ versionDateLabel(version) }}</span>
       </div>
     </button>
   </div>
@@ -27,6 +27,13 @@ function versionLabel(version: LawVersion) {
   if (version.versionNo) return version.versionNo;
   if (version.versionStatus) return labelOf(version.versionStatus);
   return `版本 ${version.id}`;
+}
+
+// 明确标注是施行日还是公布日，避免无标签回退时两种日期混淆。
+function versionDateLabel(version: LawVersion) {
+  if (version.effectiveDate) return `施行 ${version.effectiveDate}`;
+  if (version.publishDate) return `公布 ${version.publishDate}`;
+  return '日期未标注';
 }
 
 defineProps<{

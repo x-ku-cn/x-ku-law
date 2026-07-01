@@ -56,6 +56,25 @@ public interface OpsService {
     /** 存量回填：为已发布且尚无 AI 任务/解读的版本批量入队 AI 任务，返回入队条数。 */
     int backfillAiTasks();
 
+    /**
+     * 存量回填条款的章/节归属：重解析各版本已存的 content_text，按条号匹配现有条款，
+     * 仅当重解析条文与库中逐字一致时才更新章/节四列（不动正文与分片，零重嵌入）。
+     * 按版本 id 升序游标翻页，单页失败只跳过该页并留痕，不拖垮整体；幂等，可安全重跑。
+     * @param dryRun true 时只统计不落库，用于先预演全库健康度。
+     * @param fromVersionId 从该版本 id 之后开始（含义为 version_id &gt; fromVersionId），用于中断后续跑；null/0 从头。
+     */
+    ChapterBackfillResultVO backfillArticleChapters(boolean dryRun, Long fromVersionId);
+
+    /**
+     * 按生效日期重算全库法规时效状态：游标翻页扫描 lr_law_document，逐文档调用
+     * {@link cn.xku.law.law.service.LawDocumentService#reconcileTimeliness}
+     * （未生效→现行有效、现行→已失效、多版本现行版重算；repealed/amended 跳过）。
+     * 单文档失败只跳过并计数，不拖垮整体；幂等，可安全重跑。
+     *
+     * @param dryRun true 时只统计不落库，用于先预演。
+     */
+    LawStatusReconcileResultVO reconcileLawStatus(boolean dryRun);
+
     PageResult<AlertDeliveryDO> pageAlertDeliveries(String status, long pageNo, long pageSize);
 
     /** 重投失败/待发的订阅预警投递记录（走真实站内信投递）。 */

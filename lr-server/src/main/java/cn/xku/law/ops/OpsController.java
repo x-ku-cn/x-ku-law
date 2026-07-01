@@ -137,6 +137,35 @@ public class OpsController {
         return CommonResult.success(enqueued);
     }
 
+    // ===== 条款章节回填 =====
+
+    @Operation(summary = "存量回填条款章节归属",
+            description = "重解析各版本已存正文，按条号匹配并逐字校验后回填 chapter/section 列；"
+                    + "只碰四列不触分片，零重嵌入。dryRun=true（默认）只预演统计不落库；"
+                    + "fromVersionId 用于中断后从某版本 id 之后续跑（幂等可重跑）。")
+    @PreAuthorize("hasAuthority('system:ops:view')")
+    @OperLog(module = "运维监控", type = "trigger")
+    @PostMapping("/articles/backfill-chapters")
+    public CommonResult<ChapterBackfillResultVO> backfillArticleChapters(
+            @RequestParam(defaultValue = "true") boolean dryRun,
+            @RequestParam(required = false) Long fromVersionId) {
+        return CommonResult.success(opsService.backfillArticleChapters(dryRun, fromVersionId));
+    }
+
+    // ===== 时效状态重算 =====
+
+    @Operation(summary = "按生效日期重算法规时效状态",
+            description = "扫全库文档：未生效且实施日期已到→现行有效；现行且失效日期已到→已失效；"
+                    + "多版本按生效日期重算现行版。源权威的 repealed/amended 跳过。"
+                    + "dryRun=true（默认）只预演统计不落库。")
+    @PreAuthorize("hasAuthority('system:ops:view')")
+    @OperLog(module = "运维监控", type = "trigger")
+    @PostMapping("/law-status/reconcile")
+    public CommonResult<LawStatusReconcileResultVO> reconcileLawStatus(
+            @RequestParam(defaultValue = "true") boolean dryRun) {
+        return CommonResult.success(opsService.reconcileLawStatus(dryRun));
+    }
+
     // ===== 采集接入 =====
 
     @Operation(summary = "分页查询采集记录", description = "status 可选：pending/processing/success/failed")

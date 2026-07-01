@@ -2,6 +2,7 @@ package cn.xku.law.collect.parser;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -96,5 +97,93 @@ class PlainTextArticleParserTest {
         assertThat(result.getArticles()).hasSize(2);
         assertThat(result.getArticles().get(0).getContentText())
                 .isEqualTo("第一条 本办法自公布之日起施行。");
+    }
+
+    @Test
+    void attributesChapterAndSectionFromHeadingLines() {
+        // 真实结构：开头「目录」整块罗列各章（无条号）、正文按 编/章/节/条 各自独占一行、
+        // 标记与标题用全角空格（　）分隔、正文里含「本法第二章」句中引用。
+        String text = """
+                目录
+                第一章　总则
+                第二章　监督管理
+                第三章　法律责任
+
+                第一章　总则
+                第一条　为了规范管理，保护当事人合法权益，依照本法第二章的规定，制定本条例。
+                第二条　本条例适用于中华人民共和国境内的相关活动。
+
+                第二章　监督管理
+                第一节　日常监督
+                第三条　主管部门应当建立健全日常监督检查制度。
+                第四条　主管部门可以采取现场检查等措施。
+                第二节　专项监督
+                第五条　主管部门根据需要开展专项监督检查工作。
+
+                第三章　法律责任
+                第六条　违反本条例规定的，由主管部门责令改正。
+                第七条　本条例自公布之日起施行。
+                """;
+
+        ParseResult result = parser.parse(ParseInput.ofText(text, Map.of()));
+        List<ParsedArticle> arts = result.getArticles();
+
+        assertThat(arts).extracting(ParsedArticle::getArticleNo)
+                .containsExactly("第一条", "第二条", "第三条", "第四条", "第五条", "第六条", "第七条");
+
+        ParsedArticle a1 = byNo(arts, "第一条");
+        // 「目录」块的连续章标题不污染：首条拿到的是正文里紧邻它的「第一章 总则」。
+        assertThat(a1.getChapterNo()).isEqualTo("第一章");
+        assertThat(a1.getChapterTitle()).isEqualTo("总则");
+        assertThat(a1.getSectionNo()).isNull();
+        // 句中「本法第二章」引用应留在正文，且不被误当作标题。
+        assertThat(a1.getContentText()).contains("依照本法第二章的规定");
+
+        assertThat(byNo(arts, "第二条").getChapterNo()).isEqualTo("第一章");
+
+        ParsedArticle a3 = byNo(arts, "第三条");
+        assertThat(a3.getChapterNo()).isEqualTo("第二章");
+        assertThat(a3.getChapterTitle()).isEqualTo("监督管理");
+        assertThat(a3.getSectionNo()).isEqualTo("第一节");
+        assertThat(a3.getSectionTitle()).isEqualTo("日常监督");
+
+        assertThat(byNo(arts, "第四条").getSectionNo()).isEqualTo("第一节");
+
+        ParsedArticle a5 = byNo(arts, "第五条");
+        assertThat(a5.getChapterNo()).isEqualTo("第二章");
+        assertThat(a5.getSectionNo()).isEqualTo("第二节");
+        assertThat(a5.getSectionTitle()).isEqualTo("专项监督");
+
+        // 进入新章「第三章」应清空上一章残留的节归属。
+        ParsedArticle a6 = byNo(arts, "第六条");
+        assertThat(a6.getChapterNo()).isEqualTo("第三章");
+        assertThat(a6.getChapterTitle()).isEqualTo("法律责任");
+        assertThat(a6.getSectionNo()).isNull();
+        assertThat(a6.getSectionTitle()).isNull();
+    }
+
+    @Test
+    void leavesChapterFieldsNullForFlatDocumentWithoutHeadings() {
+        // 「决定/批复」类无章节，条款照常拆分，章节字段全为空。
+        String text = """
+                第一条 为加强管理，制定本决定。
+                第二条 本决定自公布之日起施行。
+                """;
+
+        ParseResult result = parser.parse(ParseInput.ofText(text, Map.of()));
+
+        assertThat(result.getArticles()).extracting(ParsedArticle::getArticleNo)
+                .containsExactly("第一条", "第二条");
+        assertThat(result.getArticles())
+                .allSatisfy(a -> {
+                    assertThat(a.getChapterNo()).isNull();
+                    assertThat(a.getChapterTitle()).isNull();
+                    assertThat(a.getSectionNo()).isNull();
+                    assertThat(a.getSectionTitle()).isNull();
+                });
+    }
+
+    private static ParsedArticle byNo(List<ParsedArticle> arts, String no) {
+        return arts.stream().filter(a -> no.equals(a.getArticleNo())).findFirst().orElseThrow();
     }
 }

@@ -83,7 +83,7 @@ public class SegmentationStage implements LawProcessingStage {
         int articleCount = 0;
         int segmentCount = 0;
         if (articles == null || articles.isEmpty()) {
-            Long articleId = createArticle(ctx, null, null, text, 1);
+            Long articleId = createArticle(ctx, null, text, 1);
             segmentCount += createSegments(ctx, articleId, text);
             articleCount = 1;
             governanceRecorder.recordQualityIssue("law_version", ctx.getVersionId(), "parse_error",
@@ -100,8 +100,8 @@ public class SegmentationStage implements LawProcessingStage {
                             ctx.getVersionId(), a.getArticleNo());
                     continue;
                 }
-                Long articleId = createArticle(ctx, a.getArticleNo(), a.getArticleTitle(),
-                        a.getContentText(), a.getArticleOrder() != null ? a.getArticleOrder() : articleCount + 1);
+                Long articleId = createArticle(ctx, a, a.getContentText(),
+                        a.getArticleOrder() != null ? a.getArticleOrder() : articleCount + 1);
                 segmentCount += createSegments(ctx, articleId, a.getContentText());
                 articleCount++;
             }
@@ -110,13 +110,22 @@ public class SegmentationStage implements LawProcessingStage {
                 ctx.getVersionId(), articleCount, segmentCount);
     }
 
-    private Long createArticle(LawProcessingContext ctx, String articleNo, String articleTitle,
-                               String content, int order) {
+    /**
+     * 建一条 lr_law_article。{@code parsed} 为解析出的条款（含章/节归属），退化「全文条款」传 null。
+     * 章/节列直接透传解析结果，无解析上下文时为 null。
+     */
+    private Long createArticle(LawProcessingContext ctx, ParsedArticle parsed, String content, int order) {
         LawArticleCreateDTO dto = new LawArticleCreateDTO();
         dto.setDocumentId(ctx.getDocumentId());
         dto.setVersionId(ctx.getVersionId());
-        dto.setArticleNo(articleNo);
-        dto.setArticleTitle(articleTitle);
+        if (parsed != null) {
+            dto.setArticleNo(parsed.getArticleNo());
+            dto.setArticleTitle(parsed.getArticleTitle());
+            dto.setChapterNo(parsed.getChapterNo());
+            dto.setChapterTitle(parsed.getChapterTitle());
+            dto.setSectionNo(parsed.getSectionNo());
+            dto.setSectionTitle(parsed.getSectionTitle());
+        }
         dto.setArticleOrder(order);
         dto.setArticleLevel(1);
         dto.setContentText(content);

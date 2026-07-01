@@ -7,6 +7,8 @@ import cn.xku.law.law.domain.dto.LawDocumentQueryDTO;
 import cn.xku.law.law.domain.vo.LawDocumentVO;
 import com.baomidou.mybatisplus.extension.service.IService;
 
+import java.time.LocalDate;
+
 /** 法规文件核心业务接口 */
 public interface LawDocumentService extends IService<LawDocumentDO> {
 
@@ -26,10 +28,17 @@ public interface LawDocumentService extends IService<LawDocumentDO> {
     void removeDocument(Long id);
 
     /**
-     * 重算文档「现行版」：在已发布版本中取公布日最新者（并列取 id 最大），同步到
-     * currentVersionId 及文档的 publish_date/effective_date/timeliness_status。
-     * 与版本到达顺序无关，乱序/多批接入最终一致。法规时效 status（effective/repealed 等）
-     * 由接入入口在文档落库时写入，不在此覆盖。无已发布版本时不改动。
+     * 按生效日期重算文档时效：在已发布版本中选出「现行版」并对齐 currentVersionId 及文档的
+     * publish_date/effective_date/timeliness_status，同时按日期推导 status
+     * （未生效→现行有效、现行→已失效）。与版本到达顺序无关，乱序/多批接入最终一致。
+     *
+     * <p>现行版取生效日期 &le; asOf 中最新者（并列取 id 最大）；无已生效版本时取最早的未来生效版本
+     * （status=not_effective）；均无可判定生效日期时回退取公布日最新者且不动 status。
+     * <b>源权威终态 repealed/amended 整条跳过，不自动改回。</b>
+     * status 变更会写 lr_law_status_change 留痕；落库变更会重新入队检索索引（status 存于 ES）。
+     *
+     * @param asOf   判定基准日（定时/接入传 today）
+     * @param dryRun true 时只计算不落库、不留痕、不入队，用于预演。
      */
-    void recomputeCurrentVersion(Long documentId);
+    TimelinessReconcileResult reconcileTimeliness(Long documentId, LocalDate asOf, boolean dryRun);
 }

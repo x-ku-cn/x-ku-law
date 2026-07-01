@@ -197,7 +197,9 @@ function versionById(id?: number) {
 function versionDateStr(id?: number) {
   const v = versionById(id);
   if (!v) return '';
-  return v.effectiveDate || v.publishDate || '';
+  if (v.effectiveDate) return `施行 ${v.effectiveDate}`;
+  if (v.publishDate) return `公布 ${v.publishDate}`;
+  return '';
 }
 
 function versionName(id?: number) {
@@ -207,7 +209,11 @@ function versionName(id?: number) {
 }
 
 function versionOptionLabel(version: LawVersion) {
-  const date = version.effectiveDate || version.publishDate || '日期未标注';
+  const date = version.effectiveDate
+    ? `施行 ${version.effectiveDate}`
+    : version.publishDate
+      ? `公布 ${version.publishDate}`
+      : '日期未标注';
   const name = version.versionName || version.versionNo || String(version.id);
   return `${date} · ${name}`;
 }

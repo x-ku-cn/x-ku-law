@@ -4,7 +4,9 @@ import cn.xku.law.law.domain.LawArticleDO;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Update;
 
 /** lr_law_article 数据访问层 */
 @Mapper
@@ -17,4 +19,18 @@ public interface LawArticleMapper extends BaseMapper<LawArticleDO> {
      */
     @Delete("DELETE FROM lr_law_article WHERE version_id = #{versionId}")
     int physicalDeleteByVersion(@Param("versionId") Long versionId);
+
+    /**
+     * 只更新单条的章/节归属列（存量回填用）。刻意仅触碰 chapter_no/chapter_title/section_no/section_title
+     * 四列，不动 content_text/content_hash 与分片，故不会触发向量重嵌入。
+     * timeout=60：单条（批量执行时为整批）超 60s 即抛异常，避免远程连接半死时无限阻塞。
+     */
+    @Options(timeout = 60)
+    @Update("UPDATE lr_law_article SET chapter_no = #{chapterNo}, chapter_title = #{chapterTitle}, "
+            + "section_no = #{sectionNo}, section_title = #{sectionTitle} WHERE id = #{id}")
+    int updateChapterById(@Param("id") Long id,
+                          @Param("chapterNo") String chapterNo,
+                          @Param("chapterTitle") String chapterTitle,
+                          @Param("sectionNo") String sectionNo,
+                          @Param("sectionTitle") String sectionTitle);
 }

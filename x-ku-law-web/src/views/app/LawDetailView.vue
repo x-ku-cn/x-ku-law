@@ -58,7 +58,8 @@
           <div class="meta-box">
             <span class="mono">{{ document.documentNo || '暂无文号' }}</span>
             <StatusBadge :value="document.timelinessStatus || document.status" />
-            <span class="mono">{{ document.effectiveDate || '生效日期未标注' }}</span>
+            <span class="mono">公布 {{ document.publishDate || '未标注' }}</span>
+            <span class="mono">施行 {{ document.effectiveDate || '未标注' }}</span>
             <label v-if="versionOptions.length > 1" class="version-pick">
               <span class="mono">阅读版本</span>
               <XSelect :model-value="currentVersionValue" :options="versionOptions" placeholder="选择版本" @update:model-value="changeVersion" />
@@ -83,17 +84,25 @@
             <Skeleton v-for="n in 8" :key="n" width="90%" />
           </template>
           <template v-else>
-            <a
-              v-for="article in articles"
-              :key="article.id"
-              :href="`#article-${article.id}`"
-              class="toc-link"
-              :class="{ active: article.id === activeArticleId }"
-              @click.prevent="scrollToArticle(article.id)"
-            >
-              <Diamond :size="6" />
-              <span>{{ article.articleNo || article.articleTitle || `条款 ${article.id}` }}</span>
-            </a>
+            <template v-for="group in tocGroups" :key="group.key">
+              <div v-if="group.chapterNo" class="toc-group-title">
+                {{ group.chapterNo }}<span v-if="group.chapterTitle"> {{ group.chapterTitle }}</span>
+              </div>
+              <a
+                v-for="item in group.items"
+                :key="item.article.id"
+                :href="`#article-${item.article.id}`"
+                class="toc-link"
+                :class="{ active: item.article.id === activeArticleId }"
+                @click.prevent="scrollToArticle(item.article.id)"
+              >
+                <Diamond :size="6" />
+                <span class="toc-index mono">{{ item.index }}</span>
+                <span class="toc-label">{{ item.article.articleNo || item.article.articleTitle || `条款 ${item.article.id}` }}</span>
+                <span v-if="item.article.obligationFlag" class="toc-tag">义务</span>
+                <span v-else-if="item.article.penaltyFlag" class="toc-tag tag-rose">责任</span>
+              </a>
+            </template>
           </template>
         </aside>
 
@@ -249,6 +258,29 @@ const citationCount = computed(
 const relationCount = computed(() => relations.value.length);
 
 const activeArticle = computed(() => articles.value.find((a) => a.id === activeArticleId.value) ?? null);
+
+/** 目录按章分组：同 chapterNo 归一组，条款带跨全文连续的两位流水号。无章节则退化为单个「无标题」组。 */
+const tocGroups = computed(() => {
+  const groups: {
+    key: string;
+    chapterNo?: string;
+    chapterTitle?: string;
+    items: { article: (typeof articles.value)[number]; index: string }[];
+  }[] = [];
+  let running = 0;
+  for (const article of articles.value) {
+    running += 1;
+    const index = String(running).padStart(2, '0');
+    const key = article.chapterNo || '__flat__';
+    let group = groups[groups.length - 1];
+    if (!group || group.key !== key) {
+      group = { key, chapterNo: article.chapterNo, chapterTitle: article.chapterTitle, items: [] };
+      groups.push(group);
+    }
+    group.items.push({ article, index });
+  }
+  return groups;
+});
 
 const editorialNote = computed(() => {
   const a = activeArticle.value;
@@ -657,6 +689,47 @@ async function submitFeedback() {
 
 .toc-link.active :deep(.diamond) {
   background: var(--accent);
+}
+
+.toc-group-title {
+  margin-top: 16px;
+  padding: 6px 0 4px;
+  color: var(--ink-1);
+  font-family: var(--serif-body);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.toc-group-title:first-child {
+  margin-top: 0;
+}
+
+.toc-index {
+  flex-shrink: 0;
+  color: var(--muted-2);
+  font-size: 11px;
+}
+
+.toc-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toc-tag {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--accent-deep);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.toc-tag.tag-rose {
+  color: var(--rose, #b4436c);
 }
 
 .reading {

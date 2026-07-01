@@ -25,6 +25,14 @@ public class PlainTextArticleParser implements RawDocumentParser {
     private static final Pattern TRAILING_CHAPTER =
             Pattern.compile("\\s*第\\s*[零一二三四五六七八九十百千两0-9]+\\s*[章节编部篇][\\s　\\u4e00-\\u9fa5]*$");
 
+    /**
+     * 章/节/编/篇标题行：整行仅由「第X章/节/编/篇 + 可选标题」构成（不含句末标点、不含条文正文）。
+     * 只在「行首」识别，天然排除正文里的句中引用（如「本法第二章的规定」）；标题不含 。；: 保证不误吞正文。
+     * group(1)=标记（第一章）；group(2)=标题（可空）。匹配前需先剥去行首/行尾空白（含全角空格 U+3000）。
+     */
+    private static final Pattern HEADING_LINE =
+            Pattern.compile("^(第\\s*[零一二三四五六七八九十百千两0-9]+\\s*[章节编篇])(?:[\\s\\u3000]+([^。；;：:]*))?$");
+
     private static final String[] REFERENCE_PREFIXES = {
             "本法", "本条例", "本规定", "本办法", "本细则", "本规则",
             "依据", "根据", "按照", "依照", "参照",
@@ -77,20 +85,113 @@ public class PlainTextArticleParser implements RawDocumentParser {
             }
         }
 
+        // 扫描全文的行首章/节标题，按 offset 升序。用于给每个条款附上其所属章/节归属：
+        // 条款按 contentStart 取「其前最近生效」的章/节状态。「目录」块里连续标题之间没有条款，
+        // 状态会被后续正文的同级标题逐个覆盖，首条条款拿到的必是正文里紧邻它的那个标题 → 目录不污染。
+        List<Heading> headings = scanHeadings(text);
+
         int order = 0;
+        int hIdx = 0;
+        String curChapterNo = null, curChapterTitle = null, curSectionNo = null, curSectionTitle = null;
         for (int k = 0; k < acceptedIdx.size(); k++) {
             int i = acceptedIdx.get(k);
             int contentStart = spans.get(i)[0];
+            // 推进章节状态到本条起点：应用所有 offset <= contentStart 的标题。
+            while (hIdx < headings.size() && headings.get(hIdx).offset <= contentStart) {
+                Heading h = headings.get(hIdx++);
+                if (h.section) {
+                    curSectionNo = h.no;
+                    curSectionTitle = h.title;
+                } else {
+                    curChapterNo = h.no;
+                    curChapterTitle = h.title;
+                    curSectionNo = null; // 进入新章，清空当前节归属
+                    curSectionTitle = null;
+                }
+            }
             int contentEnd = (k + 1 < acceptedIdx.size()) ? spans.get(acceptedIdx.get(k + 1))[0] : text.length();
             String content = cleanArticleContent(text.substring(contentStart, contentEnd));
             if (k == acceptedIdx.size() - 1 && isIncompleteArticle(content)) {
                 continue;
             }
             if (content.length() >= 10) {
-                articles.add(new ParsedArticle(nos.get(i), null, content, ++order, 1));
+                ParsedArticle article = new ParsedArticle(nos.get(i), null, content, ++order, 1);
+                article.setChapterNo(curChapterNo);
+                article.setChapterTitle(curChapterTitle);
+                article.setSectionNo(curSectionNo);
+                article.setSectionTitle(curSectionTitle);
+                articles.add(article);
             }
         }
         return articles;
+    }
+
+    /** 章/节标题及其在全文中的起始偏移。 */
+    private static final class Heading {
+        final int offset;
+        final boolean section; // true=节，false=章/编/篇
+        final String no;
+        final String title;
+
+        Heading(int offset, boolean section, String no, String title) {
+            this.offset = offset;
+            this.section = section;
+            this.no = no;
+            this.title = title;
+        }
+    }
+
+    /** 逐行扫描，识别独占一行的章/节标题，返回按 offset 升序的列表。 */
+    private static List<Heading> scanHeadings(String text) {
+        List<Heading> list = new ArrayList<>();
+        int lineStart = 0;
+        int len = text.length();
+        for (int i = 0; i <= len; i++) {
+            if (i == len || text.charAt(i) == '\n') {
+                Heading h = parseHeadingLine(text.substring(lineStart, i), lineStart);
+                if (h != null) {
+                    list.add(h);
+                }
+                lineStart = i + 1;
+            }
+        }
+        return list;
+    }
+
+    /** 把单行解析为章/节标题；非标题行返回 null。剥去行首尾空白（含全角空格 U+3000）后整行匹配。 */
+    private static Heading parseHeadingLine(String line, int lineStart) {
+        String s = stripEdges(line);
+        if (s.isEmpty()) {
+            return null;
+        }
+        Matcher m = HEADING_LINE.matcher(s);
+        if (!m.matches()) {
+            return null;
+        }
+        String marker = m.group(1).replaceAll("\\s+", "");
+        String title = m.group(2) == null ? null : stripEdges(m.group(2));
+        if (title != null && title.isEmpty()) {
+            title = null;
+        }
+        // 章节标题通常很短；超长十有八九是把正文误当标题，保守放弃以免污染归属。
+        if (title != null && title.length() > 60) {
+            return null;
+        }
+        boolean section = marker.endsWith("节");
+        return new Heading(lineStart, section, marker, title);
+    }
+
+    /** 去除首尾空白，包含全角空格 U+3000 与 NBSP（Java 的 \\s 不覆盖它们）。 */
+    private static String stripEdges(String s) {
+        int a = 0;
+        int b = s.length();
+        while (a < b && isBlank(s.charAt(a))) a++;
+        while (b > a && isBlank(s.charAt(b - 1))) b--;
+        return s.substring(a, b);
+    }
+
+    private static boolean isBlank(char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\f' || c == ' ' || c == '　';
     }
 
     /**

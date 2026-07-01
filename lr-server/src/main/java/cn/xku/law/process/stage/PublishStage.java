@@ -15,8 +15,8 @@ import org.springframework.stereotype.Component;
  * 阶段 30：发布版本并重算文档现行版。
  * 复用 {@link LawVersionService#publishVersion}（置 published、更新 currentVersionId、
  * 入队搜索索引 + 向量同步任务、发布订阅事件），随后调用
- * {@link LawDocumentService#recomputeCurrentVersion} 把现行版对齐到公布日最新的已发布版本。
- * 幂等：版本已发布则跳过 publish（避免重复入队/抛错），仍重算现行版。
+ * {@link LawDocumentService#reconcileTimeliness} 按生效日期对齐现行版与时效 status。
+ * 幂等：版本已发布则跳过 publish（避免重复入队/抛错），仍重算时效。
  */
 @Slf4j
 @Component
@@ -60,7 +60,7 @@ public class PublishStage implements LawProcessingStage {
         } else {
             log.debug("[Publish] versionId={} already published, skip publish", ctx.getVersionId());
         }
-        lawDocumentService.recomputeCurrentVersion(ctx.getDocumentId());
+        lawDocumentService.reconcileTimeliness(ctx.getDocumentId(), java.time.LocalDate.now(), false);
     }
 
     private static String safe(String s) {

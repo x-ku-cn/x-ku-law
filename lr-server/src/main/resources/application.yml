@@ -186,6 +186,14 @@ app:
     # 增量接入新法规时保持 false，正常预警。
     suppress-alerts: ${COLLECT_SUPPRESS_ALERTS:false}
 
+  # ===== 时效状态定时重算 =====
+  # 按生效日期把「尚未生效」到达实施日期后自动转「现行有效」、到达失效日期转「已失效」、
+  # 多版本切换现行版；源权威的 repealed/amended 跳过。手动走 POST /ops/law-status/reconcile。
+  law-status:
+    enabled: ${LAW_STATUS_ENABLED:true}
+    # 默认每日 02:30 跑一次（时效以「日」为粒度，日跑即可覆盖当天的日期边界）。
+    cron: ${LAW_STATUS_CRON:0 30 2 * * ?}
+
   # ===== 对象存储（MinIO / S3 兼容，前端直传预签名） =====
   storage:
     endpoint: ${OSS_ENDPOINT:http://localhost:9000}
