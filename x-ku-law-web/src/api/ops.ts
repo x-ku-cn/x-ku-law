@@ -243,3 +243,104 @@ export interface AuditRecordQuery extends OpsTaskQuery {
 export function getAuditRecords(params: AuditRecordQuery) {
   return unwrap<PageResult<AuditRecord>>(http.get('/ops/audit-records', { params }));
 }
+
+// ===== 内容解析修复 =====
+export type ParseRepairStatus = 'open' | 'resolved' | 'cancelled';
+export type ParseRepairBizType = 'law_version' | string;
+export type ParseRepairParserType = 'law_article' | 'decision_text' | 'generic_section' | string;
+export type ParseRepairLayoutType = 'article_reader' | 'decision_reader' | 'generic_reader' | string;
+
+export interface ParsedBlockDraft {
+  blockType?: string;
+  blockNo?: string;
+  blockTitle?: string;
+  blockOrder?: number;
+  blockLevel?: number;
+  chapterNo?: string;
+  chapterTitle?: string;
+  sectionNo?: string;
+  sectionTitle?: string;
+  contentText: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ParseRepairIssue {
+  id?: number;
+  bizType: ParseRepairBizType;
+  bizId: number;
+  bizTitle?: string;
+  parserType: ParseRepairParserType;
+  layoutType: ParseRepairLayoutType;
+  source?: string;
+  reason?: string;
+  status: ParseRepairStatus;
+  qualityIssueId?: number;
+  issueDesc?: string;
+  createTime?: string;
+  resolvedTime?: string;
+}
+
+export interface ParseRepairIssueQuery extends OpsTaskQuery {
+  bizType?: string;
+  parserType?: string;
+}
+
+export interface ParseRepairCreateRequest {
+  bizType: string;
+  bizId: number;
+  parserType?: string;
+  layoutType?: string;
+  source?: string;
+  reason: string;
+  qualityIssueId?: number;
+}
+
+export interface ParseRepairDetail {
+  bizType: string;
+  bizId: number;
+  bizTitle?: string;
+  parserType: ParseRepairParserType;
+  layoutType: ParseRepairLayoutType;
+  contentText?: string;
+  fileId?: number;
+  repairIssueId?: number;
+  qualityIssueId?: number;
+  metadata?: Record<string, unknown>;
+  blocks: ParsedBlockDraft[];
+}
+
+export interface ParseRepairPreviewRequest {
+  bizType?: string;
+  parserType?: string;
+  text: string;
+}
+
+export interface ParseRepairSaveRequest {
+  repairIssueId?: number;
+  qualityIssueId?: number;
+  parserType?: string;
+  layoutType?: string;
+  contentText?: string;
+  triggerSync?: boolean;
+  blocks: ParsedBlockDraft[];
+}
+
+export function getParseRepairIssues(params: ParseRepairIssueQuery) {
+  return unwrap<PageResult<ParseRepairIssue>>(http.get('/ops/parse-repair/issues', { params }));
+}
+
+export function createParseRepairIssue(payload: ParseRepairCreateRequest) {
+  return unwrap<ParseRepairIssue>(http.post('/ops/parse-repair/issues', payload));
+}
+
+export function getParseRepairTarget(bizType: string, bizId: number | string) {
+  return unwrap<ParseRepairDetail>(http.get(`/ops/parse-repair/targets/${bizType}/${bizId}`));
+}
+
+export function previewParseRepair(payload: ParseRepairPreviewRequest) {
+  return unwrap<ParsedBlockDraft[]>(http.post('/ops/parse-repair/preview', payload));
+}
+
+export function saveParseRepairBlocks(bizType: string, bizId: number | string, payload: ParseRepairSaveRequest) {
+  return unwrap<unknown>(http.put(`/ops/parse-repair/targets/${bizType}/${bizId}/blocks`, payload));
+}

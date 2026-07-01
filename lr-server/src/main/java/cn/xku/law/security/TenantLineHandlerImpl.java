@@ -71,6 +71,7 @@ public class TenantLineHandlerImpl implements TenantLineHandler {
             // 数据治理
             "lr_data_quality_issue",
             "lr_data_audit_record",
+            "lr_parse_repair_issue",
             // AI / 检索基础设施
             "lr_search_index_task",
             "lr_vector_sync_task",

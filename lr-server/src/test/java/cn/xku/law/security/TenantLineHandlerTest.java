@@ -104,8 +104,8 @@ class TenantLineHandlerTest {
 
     @Test
     void whitelistSizeSanityCheck() {
-        // 5(系统) + 12(法规，含 lr_law_interpretation) + 24(平台，含 lr_law_process_task/lr_law_ai_task) = 41 条
-        assertThat(TenantLineHandlerImpl.TENANT_IGNORED_TABLES).hasSize(41);
+        // 5(系统) + 12(法规，含 lr_law_interpretation) + 25(平台，含解析修复单) = 42 条
+        assertThat(TenantLineHandlerImpl.TENANT_IGNORED_TABLES).hasSize(42);
     }
 
     @Test
@@ -113,5 +113,6 @@ class TenantLineHandlerTest {
         // lr_subscription_match / lr_alert_delivery 由平台事件触发生成，通过 rule_id 保证用户隔离
         assertThat(TenantLineHandlerImpl.TENANT_IGNORED_TABLES).contains("lr_subscription_match");
         assertThat(TenantLineHandlerImpl.TENANT_IGNORED_TABLES).contains("lr_alert_delivery");
+        assertThat(TenantLineHandlerImpl.TENANT_IGNORED_TABLES).contains("lr_parse_repair_issue");
     }
 }

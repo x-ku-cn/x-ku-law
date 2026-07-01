@@ -90,6 +90,17 @@ public interface OpsService {
 
     PageResult<DataAuditRecordDO> pageAuditRecords(String auditType, long pageNo, long pageSize);
 
+    PageResult<ParseRepairIssueVO> pageParseRepairIssues(String status, String bizType, String parserType,
+                                                         long pageNo, long pageSize);
+
+    ParseRepairIssueVO createParseRepairIssue(ParseRepairCreateRequest request);
+
+    ParseRepairDetailVO getParseRepairTarget(String bizType, Long bizId);
+
+    List<ParsedBlockDraft> previewParseRepair(ParseRepairPreviewRequest request);
+
+    void saveParseRepairBlocks(String bizType, Long bizId, ParseRepairSaveRequest request);
+
     /** 当前定时任务配置（只读，来自 application.yml / 环境变量）。 */
     List<OpsConfigVO> schedulerConfig();
 }

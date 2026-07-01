@@ -215,6 +215,10 @@ public class VectorSyncTaskProcessor {
 
     private void doDelete(VectorSyncTaskDO task) {
         String index = resolveIndex(task);
+        if (StringUtils.hasText(task.getVectorId())) {
+            searchClient.deleteDocument(index, task.getVectorId());
+            return;
+        }
         List<LawArticleSegmentDO> segments = segmentMapper.selectList(
                 new LambdaQueryWrapper<LawArticleSegmentDO>()
                         .eq(LawArticleSegmentDO::getVersionId, task.getRefId()));

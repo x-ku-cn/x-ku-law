@@ -21,6 +21,7 @@ import cn.xku.law.subscription.domain.AlertDeliveryDO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -326,6 +327,58 @@ public class OpsController {
     @PutMapping("/quality-issues/{id}/resolve")
     public CommonResult<?> resolveQualityIssue(@PathVariable Long id) {
         opsService.resolveQualityIssue(id);
+        return CommonResult.success();
+    }
+
+    // ===== 内容解析修复 =====
+
+    @Operation(summary = "分页查询内容解析修复单", description = "支持 bizType/parserType/status 过滤；默认聚合系统 parse_error 与人工修复单")
+    @PreAuthorize("hasAuthority('system:ops:audit')")
+    @GetMapping("/parse-repair/issues")
+    public CommonResult<PageResult<ParseRepairIssueVO>> parseRepairIssues(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String bizType,
+            @RequestParam(required = false) String parserType,
+            @RequestParam(defaultValue = "1") long pageNo,
+            @RequestParam(defaultValue = "20") long pageSize) {
+        return CommonResult.success(opsService.pageParseRepairIssues(status, bizType, parserType, pageNo, pageSize));
+    }
+
+    @Operation(summary = "主动创建内容解析修复单")
+    @PreAuthorize("hasAuthority('system:ops:audit')")
+    @OperLog(module = "解析修复", type = "create")
+    @PostMapping("/parse-repair/issues")
+    public CommonResult<ParseRepairIssueVO> createParseRepairIssue(
+            @Valid @RequestBody ParseRepairCreateRequest request) {
+        return CommonResult.success(opsService.createParseRepairIssue(request));
+    }
+
+    @Operation(summary = "查询内容解析修复目标详情")
+    @PreAuthorize("hasAuthority('system:ops:audit')")
+    @GetMapping("/parse-repair/targets/{bizType}/{bizId}")
+    public CommonResult<ParseRepairDetailVO> parseRepairTarget(
+            @PathVariable String bizType,
+            @PathVariable Long bizId) {
+        return CommonResult.success(opsService.getParseRepairTarget(bizType, bizId));
+    }
+
+    @Operation(summary = "预览内容解析结果")
+    @PreAuthorize("hasAuthority('system:ops:audit')")
+    @PostMapping("/parse-repair/preview")
+    public CommonResult<List<ParsedBlockDraft>> previewParseRepair(
+            @Valid @RequestBody ParseRepairPreviewRequest request) {
+        return CommonResult.success(opsService.previewParseRepair(request));
+    }
+
+    @Operation(summary = "保存内容解析修复结果")
+    @PreAuthorize("hasAuthority('system:ops:audit')")
+    @OperLog(module = "解析修复", type = "update")
+    @PutMapping("/parse-repair/targets/{bizType}/{bizId}/blocks")
+    public CommonResult<?> saveParseRepairBlocks(
+            @PathVariable String bizType,
+            @PathVariable Long bizId,
+            @Valid @RequestBody ParseRepairSaveRequest request) {
+        opsService.saveParseRepairBlocks(bizType, bizId, request);
         return CommonResult.success();
     }
 

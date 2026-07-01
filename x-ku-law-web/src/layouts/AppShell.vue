@@ -247,6 +247,7 @@ const adminNav: NavGroup[] = [
       { label: '处理管线', to: { name: 'admin.ops.process' }, icon: Workflow, match: (path) => path.startsWith('/admin/ops/process') },
       { label: '索引任务', to: { name: 'admin.ops.index' }, icon: ServerCog, match: (path) => path.startsWith('/admin/ops/index') },
       { label: '数据治理', to: { name: 'admin.ops.governance' }, icon: ShieldCheck, match: (path) => path.startsWith('/admin/ops/governance') },
+      { label: '解析修复', to: { name: 'admin.ops.parseRepair' }, icon: FileCode2, match: (path) => path.startsWith('/admin/ops/parse-repair') },
       { label: '定时任务', to: { name: 'admin.ops.scheduler' }, icon: Clock, match: (path) => path.startsWith('/admin/ops/scheduler') }
     ]
   },

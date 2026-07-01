@@ -54,6 +54,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'ops/process-tasks', name: 'admin.ops.process', component: () => import('@/views/admin/ops/ProcessTaskView.vue') },
       { path: 'ops/index-tasks', name: 'admin.ops.index', component: () => import('@/views/admin/ops/IndexTaskView.vue') },
       { path: 'ops/governance', name: 'admin.ops.governance', component: () => import('@/views/admin/ops/GovernanceView.vue') },
+      { path: 'ops/parse-repair', name: 'admin.ops.parseRepair', component: () => import('@/views/admin/ops/ParseRepairView.vue'), meta: { skeletonLayout: 'table' } },
+      { path: 'ops/parse-repair/:bizType/:bizId', name: 'admin.ops.parseRepairEditor', component: () => import('@/views/admin/ops/ParseRepairEditor.vue'), meta: { skeletonLayout: 'generic' } },
       { path: 'ops/scheduler', name: 'admin.ops.scheduler', component: () => import('@/views/admin/ops/SchedulerConfigView.vue') }
     ]
   },

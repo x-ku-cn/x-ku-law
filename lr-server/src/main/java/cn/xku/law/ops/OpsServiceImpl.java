@@ -11,6 +11,7 @@ import cn.xku.law.collect.parser.ParserRegistry;
 import cn.xku.law.common.result.PageResult;
 import cn.xku.law.law.domain.LawAiTaskDO;
 import cn.xku.law.law.domain.LawArticleDO;
+import cn.xku.law.law.domain.LawArticleSegmentDO;
 import cn.xku.law.law.domain.LawDocumentDO;
 import cn.xku.law.law.domain.LawProcessTaskDO;
 import cn.xku.law.law.domain.LawVersionDO;
@@ -18,11 +19,13 @@ import cn.xku.law.law.domain.SearchIndexTaskDO;
 import cn.xku.law.law.domain.VectorSyncTaskDO;
 import cn.xku.law.law.mapper.LawAiTaskMapper;
 import cn.xku.law.law.mapper.LawArticleMapper;
+import cn.xku.law.law.mapper.LawArticleSegmentMapper;
 import cn.xku.law.law.mapper.LawDocumentMapper;
 import cn.xku.law.law.mapper.LawProcessTaskMapper;
 import cn.xku.law.law.mapper.LawVersionMapper;
 import cn.xku.law.law.service.LawDocumentService;
 import cn.xku.law.law.service.TimelinessReconcileResult;
+import cn.xku.law.ops.mapper.ParseRepairIssueMapper;
 import cn.xku.law.law.domain.DataAuditRecordDO;
 import cn.xku.law.law.domain.DataQualityIssueDO;
 import cn.xku.law.law.mapper.DataAuditRecordMapper;
@@ -45,14 +48,21 @@ import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -70,7 +80,9 @@ public class OpsServiceImpl implements OpsService {
     private final DataAuditRecordMapper auditRecordMapper;
     private final LawVersionMapper lawVersionMapper;
     private final LawArticleMapper lawArticleMapper;
+    private final LawArticleSegmentMapper lawArticleSegmentMapper;
     private final LawDocumentMapper lawDocumentMapper;
+    private final ParseRepairIssueMapper parseRepairIssueMapper;
     private final LawDocumentService lawDocumentService;
     private final ParserRegistry parserRegistry;
     private final DataGovernanceRecorder governanceRecorder;
@@ -423,6 +435,579 @@ public class OpsServiceImpl implements OpsService {
         }
         w.orderByDesc(DataAuditRecordDO::getId);
         return PageResult.of(auditRecordMapper.selectPage(Page.of(pageNo, pageSize), w));
+    }
+
+    @Override
+    public PageResult<ParseRepairIssueVO> pageParseRepairIssues(String status, String bizType, String parserType,
+                                                                long pageNo, long pageSize) {
+        String st = StringUtils.hasText(status) ? status : "open";
+        List<ParseRepairIssueVO> rows = new ArrayList<>();
+
+        LambdaQueryWrapper<ParseRepairIssueDO> issueWrapper = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(st)) {
+            issueWrapper.eq(ParseRepairIssueDO::getStatus, st);
+        }
+        if (StringUtils.hasText(bizType)) {
+            issueWrapper.eq(ParseRepairIssueDO::getBizType, bizType);
+        }
+        if (StringUtils.hasText(parserType)) {
+            issueWrapper.eq(ParseRepairIssueDO::getParserType, parserType);
+        }
+        issueWrapper.orderByDesc(ParseRepairIssueDO::getId);
+        Page<ParseRepairIssueDO> manualPage = parseRepairIssueMapper.selectPage(Page.of(pageNo, pageSize), issueWrapper);
+        List<ParseRepairIssueDO> manualIssues = manualPage.getRecords();
+        Set<String> existingOpenKeys = new LinkedHashSet<>();
+        for (ParseRepairIssueDO issue : manualIssues) {
+            rows.add(toRepairIssueVO(issue, null, null));
+            if ("open".equals(issue.getStatus())) {
+                existingOpenKeys.add(issue.getBizType() + ":" + issue.getBizId());
+            }
+        }
+
+        // 系统 parse_error 质量问题可直接进入修复队列；若已有人工修复单，则不重复展示。
+        if (!StringUtils.hasText(bizType) || "law_version".equals(bizType)) {
+            LambdaQueryWrapper<DataQualityIssueDO> qualityWrapper = new LambdaQueryWrapper<DataQualityIssueDO>()
+                    .eq(DataQualityIssueDO::getIssueType, "parse_error")
+                    .eq(DataQualityIssueDO::getRefType, "law_version");
+            if (StringUtils.hasText(st)) {
+                qualityWrapper.eq(DataQualityIssueDO::getStatus, "resolved".equals(st) ? "resolved" : "open");
+            }
+            qualityWrapper.orderByDesc(DataQualityIssueDO::getId);
+            Page<DataQualityIssueDO> qualityPage = qualityIssueMapper.selectPage(Page.of(pageNo, pageSize), qualityWrapper);
+            List<DataQualityIssueDO> qualityIssues = qualityPage.getRecords();
+            for (DataQualityIssueDO quality : qualityIssues) {
+                String key = quality.getRefType() + ":" + quality.getRefId();
+                if (existingOpenKeys.contains(key)) {
+                    continue;
+                }
+                ParseRepairIssueVO vo = fromQualityIssue(quality);
+                rows.add(vo);
+            }
+            hydrateLawVersionIssueRows(rows);
+            if (StringUtils.hasText(parserType)) {
+                rows.removeIf(row -> !parserType.equals(row.getParserType()));
+            }
+            rows.sort(Comparator.comparing(ParseRepairIssueVO::getCreateTime,
+                    Comparator.nullsLast(Comparator.naturalOrder())).reversed());
+            if (rows.size() > pageSize) {
+                rows = new ArrayList<>(rows.subList(0, (int) pageSize));
+            }
+            return PageResult.of(manualPage.getTotal() + qualityPage.getTotal(), rows);
+        }
+
+        hydrateLawVersionIssueRows(rows);
+        return PageResult.of(manualPage.getTotal(), rows);
+    }
+
+    @Override
+    public ParseRepairIssueVO createParseRepairIssue(ParseRepairCreateRequest request) {
+        ensureSupportedBizType(request.getBizType());
+        LambdaQueryWrapper<ParseRepairIssueDO> existing = new LambdaQueryWrapper<ParseRepairIssueDO>()
+                .eq(ParseRepairIssueDO::getBizType, request.getBizType())
+                .eq(ParseRepairIssueDO::getBizId, request.getBizId())
+                .eq(ParseRepairIssueDO::getStatus, "open")
+                .last("limit 1");
+        ParseRepairIssueDO old = parseRepairIssueMapper.selectOne(existing);
+        if (old != null) {
+            return toRepairIssueVO(old, null, null);
+        }
+
+        ParseRepairDetailVO target = getParseRepairTarget(request.getBizType(), request.getBizId());
+        ParseRepairIssueDO issue = new ParseRepairIssueDO();
+        issue.setBizType(request.getBizType());
+        issue.setBizId(request.getBizId());
+        issue.setParserType(firstText(request.getParserType(), target.getParserType(), "law_article"));
+        issue.setLayoutType(firstText(request.getLayoutType(), target.getLayoutType(), layoutForParser(issue.getParserType())));
+        issue.setSource(firstText(request.getSource(), "manual"));
+        issue.setReason(request.getReason());
+        issue.setStatus("open");
+        issue.setCreatedBy(SecurityUtils.getCurrentUsername());
+        issue.setQualityIssueId(request.getQualityIssueId());
+        parseRepairIssueMapper.insert(issue);
+        return toRepairIssueVO(issue, null, target.getBizTitle());
+    }
+
+    @Override
+    public ParseRepairDetailVO getParseRepairTarget(String bizType, Long bizId) {
+        ensureSupportedBizType(bizType);
+        LawVersionDO version = lawVersionMapper.selectById(bizId);
+        if (version == null) {
+            throw new AppException(ErrorCode.LAW_VERSION_NOT_FOUND);
+        }
+        LawDocumentDO doc = lawDocumentMapper.selectById(version.getDocumentId());
+        String parserType = inferParserType(doc, version);
+
+        ParseRepairDetailVO vo = new ParseRepairDetailVO();
+        vo.setBizType(bizType);
+        vo.setBizId(bizId);
+        vo.setBizTitle(doc != null ? doc.getTitle() : ("版本 " + bizId));
+        vo.setParserType(parserType);
+        vo.setLayoutType(layoutForParser(parserType));
+        vo.setContentText(version.getContentText());
+        vo.setFileId(version.getFileId());
+        vo.setRepairIssueId(openRepairIssueId(bizType, bizId));
+        vo.setQualityIssueId(openQualityIssueId("law_version", bizId, "parse_error"));
+        vo.setMetadata(Map.of(
+                "documentId", version.getDocumentId(),
+                "documentNo", doc != null ? nullToEmpty(doc.getDocumentNo()) : "",
+                "lawType", doc != null ? nullToEmpty(doc.getLawType()) : "",
+                "revisionType", nullToEmpty(version.getRevisionType()),
+                "publishDate", version.getPublishDate() != null ? version.getPublishDate().toString() : "",
+                "effectiveDate", version.getEffectiveDate() != null ? version.getEffectiveDate().toString() : ""
+        ));
+        vo.setBlocks(loadBlocks(version.getId(), parserType, version.getContentText()));
+        return vo;
+    }
+
+    @Override
+    public List<ParsedBlockDraft> previewParseRepair(ParseRepairPreviewRequest request) {
+        String parserType = firstText(request.getParserType(), "law_article");
+        if ("decision_text".equals(parserType)) {
+            return parseDecisionBlocks(request.getText());
+        }
+        return parseArticleBlocks(request.getText());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void saveParseRepairBlocks(String bizType, Long bizId, ParseRepairSaveRequest request) {
+        ensureSupportedBizType(bizType);
+        LawVersionDO version = lawVersionMapper.selectById(bizId);
+        if (version == null) {
+            throw new AppException(ErrorCode.LAW_VERSION_NOT_FOUND);
+        }
+        String parserType = firstText(request.getParserType(), "law_article");
+        List<ParsedBlockDraft> blocks = request.getBlocks();
+        validateBlocks(parserType, blocks);
+
+        if (StringUtils.hasText(request.getContentText())) {
+            version.setContentText(request.getContentText());
+            version.setContentHash(sha256(request.getContentText()));
+            lawVersionMapper.updateById(version);
+        }
+
+        enqueueVectorDeletesForExistingSegments(bizId);
+        lawArticleSegmentMapper.physicalDeleteByVersion(bizId);
+        lawArticleMapper.physicalDeleteByVersion(bizId);
+        for (int i = 0; i < blocks.size(); i++) {
+            ParsedBlockDraft block = blocks.get(i);
+            LawArticleDO article = toLawArticle(version, block, i + 1, parserType);
+            lawArticleMapper.insert(article);
+            createSegments(article.getVersionId(), article.getId(), article.getContentText());
+        }
+
+        closeRepairIssue(request.getRepairIssueId());
+        Long qualityIssueId = request.getQualityIssueId();
+        if (qualityIssueId == null) {
+            qualityIssueId = openQualityIssueId("law_version", bizId, "parse_error");
+        }
+        if (qualityIssueId != null) {
+            resolveQualityIssue(qualityIssueId);
+        }
+        if (Boolean.TRUE.equals(request.getTriggerSync())) {
+            enqueueRepairSync(bizId);
+        }
+    }
+
+    private void ensureSupportedBizType(String bizType) {
+        if (!"law_version".equals(bizType)) {
+            throw new AppException(ErrorCode.PARAM_ERROR, "暂不支持的解析修复对象类型：" + bizType);
+        }
+    }
+
+    private ParseRepairIssueVO toRepairIssueVO(ParseRepairIssueDO issue, String issueDesc, String bizTitle) {
+        ParseRepairIssueVO vo = new ParseRepairIssueVO();
+        vo.setId(issue.getId());
+        vo.setBizType(issue.getBizType());
+        vo.setBizId(issue.getBizId());
+        vo.setBizTitle(bizTitle);
+        vo.setParserType(issue.getParserType());
+        vo.setLayoutType(issue.getLayoutType());
+        vo.setSource(issue.getSource());
+        vo.setReason(issue.getReason());
+        vo.setStatus(issue.getStatus());
+        vo.setQualityIssueId(issue.getQualityIssueId());
+        vo.setIssueDesc(issueDesc);
+        vo.setCreateTime(issue.getCreateTime());
+        vo.setResolvedTime(issue.getResolvedTime());
+        return vo;
+    }
+
+    private ParseRepairIssueVO fromQualityIssue(DataQualityIssueDO quality) {
+        ParseRepairIssueVO vo = new ParseRepairIssueVO();
+        vo.setBizType("law_version");
+        vo.setBizId(quality.getRefId());
+        vo.setBizTitle("版本 " + quality.getRefId());
+        vo.setParserType("law_article");
+        vo.setLayoutType("article_reader");
+        vo.setSource("quality_issue");
+        vo.setReason(quality.getIssueDesc());
+        vo.setStatus(quality.getStatus());
+        vo.setQualityIssueId(quality.getId());
+        vo.setIssueDesc(quality.getIssueDesc());
+        vo.setCreateTime(quality.getCreateTime());
+        vo.setResolvedTime(quality.getResolvedTime());
+        return vo;
+    }
+
+    private void hydrateLawVersionIssueRows(List<ParseRepairIssueVO> rows) {
+        List<Long> versionIds = rows.stream()
+                .filter(row -> "law_version".equals(row.getBizType()) && row.getBizId() != null)
+                .map(ParseRepairIssueVO::getBizId)
+                .distinct()
+                .toList();
+        if (versionIds.isEmpty()) {
+            return;
+        }
+
+        List<LawVersionDO> versions = lawVersionMapper.selectList(new LambdaQueryWrapper<LawVersionDO>()
+                .select(LawVersionDO::getId, LawVersionDO::getDocumentId,
+                        LawVersionDO::getVersionName, LawVersionDO::getVersionNo)
+                .in(LawVersionDO::getId, versionIds));
+        Map<Long, LawVersionDO> versionById = new HashMap<>();
+        Set<Long> documentIds = new LinkedHashSet<>();
+        for (LawVersionDO version : versions) {
+            versionById.put(version.getId(), version);
+            if (version.getDocumentId() != null) {
+                documentIds.add(version.getDocumentId());
+            }
+        }
+
+        Map<Long, LawDocumentDO> docById = new HashMap<>();
+        if (!documentIds.isEmpty()) {
+            List<LawDocumentDO> docs = lawDocumentMapper.selectList(new LambdaQueryWrapper<LawDocumentDO>()
+                    .select(LawDocumentDO::getId, LawDocumentDO::getTitle, LawDocumentDO::getLawType)
+                    .in(LawDocumentDO::getId, documentIds));
+            for (LawDocumentDO doc : docs) {
+                docById.put(doc.getId(), doc);
+            }
+        }
+
+        for (ParseRepairIssueVO row : rows) {
+            if (!"law_version".equals(row.getBizType()) || row.getBizId() == null) {
+                continue;
+            }
+            LawVersionDO version = versionById.get(row.getBizId());
+            LawDocumentDO doc = version != null ? docById.get(version.getDocumentId()) : null;
+            if (doc != null && StringUtils.hasText(doc.getTitle())) {
+                row.setBizTitle(doc.getTitle());
+            } else if (version != null && StringUtils.hasText(version.getVersionName())) {
+                row.setBizTitle(version.getVersionName());
+            } else if (version != null && StringUtils.hasText(version.getVersionNo())) {
+                row.setBizTitle(version.getVersionNo());
+            }
+            if ("quality_issue".equals(row.getSource()) && doc != null) {
+                String parserType = inferParserType(doc, version);
+                row.setParserType(parserType);
+                row.setLayoutType(layoutForParser(parserType));
+            }
+        }
+    }
+
+    private Long openRepairIssueId(String bizType, Long bizId) {
+        ParseRepairIssueDO issue = parseRepairIssueMapper.selectOne(new LambdaQueryWrapper<ParseRepairIssueDO>()
+                .select(ParseRepairIssueDO::getId)
+                .eq(ParseRepairIssueDO::getBizType, bizType)
+                .eq(ParseRepairIssueDO::getBizId, bizId)
+                .eq(ParseRepairIssueDO::getStatus, "open")
+                .last("limit 1"));
+        return issue != null ? issue.getId() : null;
+    }
+
+    private Long openQualityIssueId(String refType, Long refId, String issueType) {
+        DataQualityIssueDO issue = qualityIssueMapper.selectOne(new LambdaQueryWrapper<DataQualityIssueDO>()
+                .select(DataQualityIssueDO::getId)
+                .eq(DataQualityIssueDO::getRefType, refType)
+                .eq(DataQualityIssueDO::getRefId, refId)
+                .eq(DataQualityIssueDO::getIssueType, issueType)
+                .eq(DataQualityIssueDO::getStatus, "open")
+                .last("limit 1"));
+        return issue != null ? issue.getId() : null;
+    }
+
+    private String inferParserType(LawDocumentDO doc, LawVersionDO version) {
+        String lawType = doc != null ? doc.getLawType() : null;
+        String title = doc != null ? doc.getTitle() : null;
+        if (isDecisionType(lawType) || isDecisionTitle(title)) {
+            return "decision_text";
+        }
+        return "law_article";
+    }
+
+    private boolean isDecisionType(String lawType) {
+        return StringUtils.hasText(lawType)
+                && (lawType.contains("决定") || lawType.contains("修正案"));
+    }
+
+    private boolean isDecisionTitle(String title) {
+        if (!StringUtils.hasText(title)) {
+            return false;
+        }
+        return title.contains("关于修改") && title.endsWith("的决定")
+                || title.contains("关于废止") && title.endsWith("的决定")
+                || title.contains("问题的决定")
+                || title.endsWith("的决定");
+    }
+
+    private String layoutForParser(String parserType) {
+        if ("decision_text".equals(parserType)) {
+            return "decision_reader";
+        }
+        if ("generic_section".equals(parserType)) {
+            return "generic_reader";
+        }
+        return "article_reader";
+    }
+
+    private List<ParsedBlockDraft> loadBlocks(Long versionId, String parserType, String contentText) {
+        List<LawArticleDO> articles = lawArticleMapper.selectList(new LambdaQueryWrapper<LawArticleDO>()
+                .eq(LawArticleDO::getVersionId, versionId)
+                .orderByAsc(LawArticleDO::getArticleOrder));
+        if (articles.isEmpty() && StringUtils.hasText(contentText)) {
+            return previewParseRepair(textPreviewRequest(parserType, contentText));
+        }
+        List<ParsedBlockDraft> blocks = new ArrayList<>();
+        for (LawArticleDO article : articles) {
+            ParsedBlockDraft block = new ParsedBlockDraft();
+            block.setBlockType("decision_text".equals(parserType) ? inferDecisionBlockType(article.getContentText()) : "article");
+            block.setBlockNo(article.getArticleNo());
+            block.setBlockTitle(article.getArticleTitle());
+            block.setBlockOrder(article.getArticleOrder());
+            block.setBlockLevel(article.getArticleLevel());
+            block.setChapterNo(article.getChapterNo());
+            block.setChapterTitle(article.getChapterTitle());
+            block.setSectionNo(article.getSectionNo());
+            block.setSectionTitle(article.getSectionTitle());
+            block.setContentText(article.getContentText());
+            blocks.add(block);
+        }
+        return blocks;
+    }
+
+    private ParseRepairPreviewRequest textPreviewRequest(String parserType, String text) {
+        ParseRepairPreviewRequest request = new ParseRepairPreviewRequest();
+        request.setBizType("law_version");
+        request.setParserType(parserType);
+        request.setText(text);
+        return request;
+    }
+
+    private List<ParsedBlockDraft> parseArticleBlocks(String text) {
+        ParseResult parse = parserRegistry.parse(ParseInput.ofText(text, null));
+        List<ParsedBlockDraft> blocks = new ArrayList<>();
+        List<ParsedArticle> articles = parse.getArticles();
+        if (articles != null) {
+            for (ParsedArticle article : articles) {
+                ParsedBlockDraft block = new ParsedBlockDraft();
+                block.setBlockType("article");
+                block.setBlockNo(article.getArticleNo());
+                block.setBlockTitle(article.getArticleTitle());
+                block.setBlockOrder(article.getArticleOrder());
+                block.setBlockLevel(article.getArticleLevel());
+                block.setChapterNo(article.getChapterNo());
+                block.setChapterTitle(article.getChapterTitle());
+                block.setSectionNo(article.getSectionNo());
+                block.setSectionTitle(article.getSectionTitle());
+                block.setContentText(article.getContentText());
+                blocks.add(block);
+            }
+        }
+        if (blocks.isEmpty() && StringUtils.hasText(text)) {
+            ParsedBlockDraft fallback = new ParsedBlockDraft();
+            fallback.setBlockType("article");
+            fallback.setBlockOrder(1);
+            fallback.setBlockLevel(1);
+            fallback.setContentText(text.trim());
+            blocks.add(fallback);
+        }
+        return blocks;
+    }
+
+    private List<ParsedBlockDraft> parseDecisionBlocks(String text) {
+        List<ParsedBlockDraft> blocks = new ArrayList<>();
+        if (!StringUtils.hasText(text)) {
+            return blocks;
+        }
+        String[] paragraphs = text.replace("\r\n", "\n").replace('\r', '\n').split("\\n\\s*\\n|\\n");
+        int order = 0;
+        for (String paragraph : paragraphs) {
+            String p = paragraph.trim();
+            if (p.length() < 2) {
+                continue;
+            }
+            ParsedBlockDraft block = new ParsedBlockDraft();
+            block.setBlockType(inferDecisionBlockType(p));
+            block.setBlockOrder(++order);
+            block.setBlockLevel(1);
+            block.setContentText(p);
+            if (p.length() <= 80 && (p.endsWith("决定") || p.endsWith("公告"))) {
+                block.setBlockTitle(p);
+            }
+            blocks.add(block);
+        }
+        return blocks;
+    }
+
+    private String inferDecisionBlockType(String text) {
+        if (!StringUtils.hasText(text)) {
+            return "body_paragraph";
+        }
+        String t = text.trim();
+        if (t.contains("修改为") || t.contains("删去") || t.contains("增加") || t.contains("改为")) {
+            return "amendment_item";
+        }
+        if (t.contains("自") && (t.contains("施行") || t.contains("公布之日起"))) {
+            return "effective_clause";
+        }
+        if (t.endsWith("决定") || t.contains("为了") || t.contains("根据")) {
+            return "preamble";
+        }
+        return "body_paragraph";
+    }
+
+    private void validateBlocks(String parserType, List<ParsedBlockDraft> blocks) {
+        Set<String> articleNos = new LinkedHashSet<>();
+        for (ParsedBlockDraft block : blocks) {
+            if (!StringUtils.hasText(block.getContentText())) {
+                throw new AppException(ErrorCode.PARAM_ERROR, "结构块正文不能为空");
+            }
+            if ("law_article".equals(parserType) && StringUtils.hasText(block.getBlockNo())
+                    && !articleNos.add(block.getBlockNo())) {
+                throw new AppException(ErrorCode.PARAM_ERROR, "条号重复：" + block.getBlockNo());
+            }
+        }
+    }
+
+    private LawArticleDO toLawArticle(LawVersionDO version, ParsedBlockDraft block, int defaultOrder, String parserType) {
+        LawArticleDO article = new LawArticleDO();
+        article.setDocumentId(version.getDocumentId());
+        article.setVersionId(version.getId());
+        article.setParentArticleId(0L);
+        article.setArticleNo("decision_text".equals(parserType) ? null : block.getBlockNo());
+        article.setArticleTitle(block.getBlockTitle());
+        article.setChapterNo(block.getChapterNo());
+        article.setChapterTitle(block.getChapterTitle());
+        article.setSectionNo(block.getSectionNo());
+        article.setSectionTitle(block.getSectionTitle());
+        article.setArticleOrder(block.getBlockOrder() != null ? block.getBlockOrder() : defaultOrder);
+        article.setArticleLevel(block.getBlockLevel() != null ? block.getBlockLevel() : 1);
+        article.setContentText(block.getContentText().trim());
+        article.setContentHash(sha256(article.getContentText()));
+        article.setObligationFlag(false);
+        article.setPenaltyFlag(false);
+        article.setStatus("normal");
+        return article;
+    }
+
+    private void createSegments(Long versionId, Long articleId, String content) {
+        int maxChars = env.getProperty("app.process.segment-max-chars", Integer.class, 1000);
+        List<String> chunks = splitByLength(content, maxChars);
+        for (int i = 0; i < chunks.size(); i++) {
+            String chunk = chunks.get(i);
+            LawArticleSegmentDO segment = new LawArticleSegmentDO();
+            segment.setArticleId(articleId);
+            segment.setVersionId(versionId);
+            segment.setSegmentNo(i + 1);
+            segment.setSegmentText(chunk);
+            segment.setSegmentHash(sha256(chunk));
+            segment.setTokenCount(chunk.length());
+            segment.setEmbeddingStatus("pending");
+            lawArticleSegmentMapper.insert(segment);
+        }
+    }
+
+    private List<String> splitByLength(String text, int maxChars) {
+        List<String> chunks = new ArrayList<>();
+        String t = text == null ? "" : text.trim();
+        if (t.length() <= maxChars) {
+            chunks.add(t);
+            return chunks;
+        }
+        for (int start = 0; start < t.length(); start += maxChars) {
+            chunks.add(t.substring(start, Math.min(t.length(), start + maxChars)));
+        }
+        return chunks;
+    }
+
+    private void enqueueVectorDeletesForExistingSegments(Long versionId) {
+        String index = env.getProperty("app.vector.index-name", "law_segment");
+        List<LawArticleSegmentDO> oldSegments = lawArticleSegmentMapper.selectList(new LambdaQueryWrapper<LawArticleSegmentDO>()
+                .select(LawArticleSegmentDO::getId, LawArticleSegmentDO::getVectorId)
+                .eq(LawArticleSegmentDO::getVersionId, versionId));
+        for (LawArticleSegmentDO segment : oldSegments) {
+            String vectorId = firstText(segment.getVectorId(), segment.getId() != null ? String.valueOf(segment.getId()) : null);
+            if (!StringUtils.hasText(vectorId)) {
+                continue;
+            }
+            VectorSyncTaskDO task = new VectorSyncTaskDO();
+            task.setRefType("law_article_segment");
+            task.setRefId(segment.getId());
+            task.setActionType("delete");
+            task.setSyncStatus("pending");
+            task.setVectorIndex(index);
+            task.setVectorId(vectorId);
+            task.setRetryCount(0);
+            vectorTaskMapper.insert(task);
+        }
+    }
+
+    private void closeRepairIssue(Long id) {
+        if (id == null) {
+            return;
+        }
+        ParseRepairIssueDO issue = parseRepairIssueMapper.selectById(id);
+        if (issue == null || !"open".equals(issue.getStatus())) {
+            return;
+        }
+        issue.setStatus("resolved");
+        issue.setResolvedBy(SecurityUtils.getCurrentUsername());
+        issue.setResolvedTime(LocalDateTime.now());
+        parseRepairIssueMapper.updateById(issue);
+    }
+
+    private void enqueueRepairSync(Long versionId) {
+        SearchIndexTaskDO indexTask = new SearchIndexTaskDO();
+        indexTask.setRefType("law_version");
+        indexTask.setRefId(versionId);
+        indexTask.setIndexName("law_document");
+        indexTask.setActionType("upsert");
+        indexTask.setSyncStatus("pending");
+        indexTask.setRetryCount(0);
+        indexTaskMapper.insert(indexTask);
+
+        VectorSyncTaskDO vectorTask = new VectorSyncTaskDO();
+        vectorTask.setRefType("law_version");
+        vectorTask.setRefId(versionId);
+        vectorTask.setActionType("upsert");
+        vectorTask.setSyncStatus("pending");
+        vectorTask.setVectorIndex(env.getProperty("app.vector.index-name", "law_segment"));
+        vectorTask.setRetryCount(0);
+        vectorTaskMapper.insert(vectorTask);
+    }
+
+    private static String firstText(String... values) {
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String sha256(String s) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest((s == null ? "" : s).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(digest.length * 2);
+            for (byte b : digest) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 
     @Override

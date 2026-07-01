@@ -27,6 +27,7 @@
           <div class="meta-actions">
             <XButton size="small" variant="primary" :disabled="!sourcePreviewAvailable" @click="sourcePreviewOpen = true">源文件预览</XButton>
             <XButton v-if="versions.length > 1" size="small" @click="router.push(lawCompareTo(document.id))">对比版本</XButton>
+            <XButton v-if="auth.isAdmin && currentVersion" size="small" @click="startParseRepair">发起解析修复</XButton>
             <XButton
               size="small"
               :class="{ 'is-favorited': isFavorited }"
@@ -39,7 +40,7 @@
           </div>
           <dl class="meta-stats">
             <div>
-              <dt class="mono">条文</dt>
+              <dt class="mono">{{ isDecisionLayout ? '段落' : '条文' }}</dt>
               <dd class="stat-num">{{ articles.length }}</dd>
             </div>
             <div>
@@ -77,8 +78,8 @@
       />
       <EmptyState v-else title="暂无版本记录" description="该法规当前没有可展示的历史版本。" />
 
-      <div class="reading-grid" :class="{ 'reading-grid--loading': articlesLoading }">
-        <aside class="toc">
+      <div class="reading-grid" :class="{ 'reading-grid--loading': articlesLoading, 'reading-grid--decision': isDecisionLayout }">
+        <aside v-if="!isDecisionLayout" class="toc">
           <div class="section-kicker">§ 目录 · TOC</div>
           <template v-if="articlesLoading">
             <Skeleton v-for="n in 8" :key="n" width="90%" />
@@ -86,7 +87,8 @@
           <template v-else>
             <template v-for="group in tocGroups" :key="group.key">
               <div v-if="group.chapterNo" class="toc-group-title">
-                {{ group.chapterNo }}<span v-if="group.chapterTitle"> {{ group.chapterTitle }}</span>
+                <span>{{ group.chapterHeading.no }}</span>
+                <span v-if="group.chapterHeading.title" class="toc-chapter-name">{{ group.chapterHeading.title }}</span>
               </div>
               <a
                 v-for="item in group.items"
@@ -112,6 +114,15 @@
           </template>
           <template v-else>
             <EmptyState v-if="!articles.length" title="暂无条款正文" description="该法规当前没有可展示的条款正文。" />
+            <DecisionReader
+              v-if="isDecisionLayout"
+              :file-id="currentVersion?.fileId"
+              :source-url="currentVersion?.sourceUrl"
+              :official-url="document?.officialUrl"
+              :title="document?.title"
+              :articles="articles"
+              @select="selectArticle"
+            />
             <ArticleReader
               v-else
               :articles="articles"
@@ -208,6 +219,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ArticleReader from '@/components/business/ArticleReader.vue';
+import DecisionReader from '@/components/business/DecisionReader.vue';
 import LawAiMarginalia from '@/components/business/LawAiMarginalia.vue';
 import SourceFilePreview from '@/components/business/SourceFilePreview.vue';
 import VersionTimeline from '@/components/business/VersionTimeline.vue';
@@ -226,20 +238,24 @@ import StatusBadge from '@/components/common/StatusBadge.vue';
 import XButton from '@/components/common/XButton.vue';
 import XSelect from '@/components/common/XSelect.vue';
 import XTextarea from '@/components/common/XTextarea.vue';
+import { createParseRepairIssue } from '@/api/ops';
 import { createFavorite, createFeedback, deleteFavorite, getFavorites } from '@/api/workspace';
 import { lawCompareTo } from '@/router/navigation';
 import { useLawDetail } from '@/composables/useLawDetail';
 import { useToast } from '@/composables/useToast';
+import { useAuthStore } from '@/stores/auth';
 import type { LawVersion } from '@/types/law';
 import type { OptionItem } from '@/types/api';
 import { resolveApiError } from '@/utils/apiError';
 import { copyText } from '@/utils/clipboard';
 import { downloadInterpretationPdf } from '@/utils/interpretationExport';
 import { labelOf } from '@/utils/labels';
+import { splitChapterHeading } from '@/utils/lawStructure';
 
 const route = useRoute();
 const router = useRouter();
 const toast = useToast();
+const auth = useAuthStore();
 
 const documentId = computed(() => String(route.params.documentId || ''));
 const selectedVersionId = computed(() => String(route.query.v || ''));
@@ -259,12 +275,24 @@ const relationCount = computed(() => relations.value.length);
 
 const activeArticle = computed(() => articles.value.find((a) => a.id === activeArticleId.value) ?? null);
 
+const isDecisionLayout = computed(() => {
+  const d = document.value;
+  if (!d) return false;
+  const lawType = d.lawType || '';
+  const title = d.title || '';
+  return lawType.includes('决定')
+    || lawType.includes('修正案')
+    || title.endsWith('的决定')
+    || title.includes('关于修改')
+    || title.includes('关于废止');
+});
+
 /** 目录按章分组：同 chapterNo 归一组，条款带跨全文连续的两位流水号。无章节则退化为单个「无标题」组。 */
 const tocGroups = computed(() => {
   const groups: {
     key: string;
     chapterNo?: string;
-    chapterTitle?: string;
+    chapterHeading: { no: string; title?: string };
     items: { article: (typeof articles.value)[number]; index: string }[];
   }[] = [];
   let running = 0;
@@ -274,7 +302,12 @@ const tocGroups = computed(() => {
     const key = article.chapterNo || '__flat__';
     let group = groups[groups.length - 1];
     if (!group || group.key !== key) {
-      group = { key, chapterNo: article.chapterNo, chapterTitle: article.chapterTitle, items: [] };
+      group = {
+        key,
+        chapterNo: article.chapterNo,
+        chapterHeading: splitChapterHeading(article.chapterNo, article.chapterTitle),
+        items: []
+      };
       groups.push(group);
     }
     group.items.push({ article, index });
@@ -285,6 +318,7 @@ const tocGroups = computed(() => {
 const editorialNote = computed(() => {
   const a = activeArticle.value;
   if (!a) return '';
+  if (isDecisionLayout.value) return '该段属于决定文本，请结合被修改法规的现行条文一并理解。';
   if (a.obligationFlag) return '本条为核心义务条款。';
   if (a.penaltyFlag) return '本条涉及法律责任或处罚，请结合上下位法一并理解。';
   return '本条为定义或适用范围类条款，通常不直接产生具体义务。';
@@ -369,6 +403,28 @@ function goAskAi() {
     name: 'ai.chat',
     query: { documentId: String(doc.id), documentTitle: doc.title }
   });
+}
+
+async function startParseRepair() {
+  const version = currentVersion.value;
+  if (!version) return;
+  try {
+    const issue = await createParseRepairIssue({
+      bizType: 'law_version',
+      bizId: version.id,
+      parserType: isDecisionLayout.value ? 'decision_text' : 'law_article',
+      layoutType: isDecisionLayout.value ? 'decision_reader' : 'article_reader',
+      source: 'manual',
+      reason: '管理员在阅读时发现解析结构需要人工复核'
+    });
+    router.push({
+      name: 'admin.ops.parseRepairEditor',
+      params: { bizType: issue.bizType, bizId: issue.bizId },
+      query: { repairIssueId: issue.id, parserType: issue.parserType, layoutType: issue.layoutType }
+    });
+  } catch (err) {
+    toast.error(resolveApiError(err, '发起解析修复失败'));
+  }
 }
 
 function selectArticle(id: number) {
@@ -628,6 +684,10 @@ async function submitFeedback() {
   padding-top: 28px;
 }
 
+.reading-grid--decision {
+  grid-template-columns: minmax(0, 1fr) 280px;
+}
+
 .toc,
 .marginal {
   position: sticky;
@@ -702,6 +762,10 @@ async function submitFeedback() {
 
 .toc-group-title:first-child {
   margin-top: 0;
+}
+
+.toc-chapter-name {
+  margin-left: 0.45em;
 }
 
 .toc-index {

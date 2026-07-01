@@ -67,6 +67,9 @@
           >
             {{ config.extraAction.label }}
           </XButton>
+          <XButton v-if="canStartParseRepair(row)" size="small" variant="ghost" :loading="actionPendingId === row.id" @click="startParseRepair(row)">
+            解析修复
+          </XButton>
           <XButton v-if="config.assign" size="small" variant="ghost" @click="openAssign(row)">{{ config.assign.label }}</XButton>
           <XButton v-if="config.markRead" size="small" variant="ghost" @click="markRead(row.id as number)">标记已读</XButton>
           <XButton v-if="config.remove" size="small" variant="ghost" @click="remove(row.id as number)">删除</XButton>
@@ -226,6 +229,7 @@ import StatusBadge from '@/components/common/StatusBadge.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import { useConfirm } from '@/composables/useConfirm';
 import { useToast } from '@/composables/useToast';
+import { createParseRepairIssue } from '@/api/ops';
 import type { OptionItem, RecordValue } from '@/types/api';
 import { resolveApiError } from '@/utils/apiError';
 import { formatDateTime } from '@/utils/datetime';
@@ -260,7 +264,9 @@ const hasRowActions = computed(
         config.value.remove ||
         config.value.markRead ||
         config.value.extraAction ||
-        config.value.assign
+        config.value.assign ||
+        resourceKey.value === 'lawVersions' ||
+        resourceKey.value === 'lawArticles'
     )
 );
 const rows = ref<Record<string, unknown>[]>([]);
@@ -632,6 +638,35 @@ async function runExtraAction(row: Record<string, unknown>) {
     await reload(pageNo.value);
   } catch (err) {
     toast.error(resolveApiError(err, '操作失败。'));
+  } finally {
+    actionPendingId.value = null;
+  }
+}
+
+function canStartParseRepair(row: Record<string, unknown>) {
+  if (resourceKey.value === 'lawVersions') return Boolean(row.id);
+  if (resourceKey.value === 'lawArticles') return Boolean(row.versionId);
+  return false;
+}
+
+async function startParseRepair(row: Record<string, unknown>) {
+  const versionId = resourceKey.value === 'lawVersions' ? Number(row.id) : Number(row.versionId);
+  if (!Number.isFinite(versionId)) return;
+  actionPendingId.value = Number(row.id) || versionId;
+  try {
+    const issue = await createParseRepairIssue({
+      bizType: 'law_version',
+      bizId: versionId,
+      source: 'manual',
+      reason: '管理员在管理端发现解析结构需要人工复核'
+    });
+    router.push({
+      name: 'admin.ops.parseRepairEditor',
+      params: { bizType: issue.bizType, bizId: issue.bizId },
+      query: { repairIssueId: issue.id, parserType: issue.parserType, layoutType: issue.layoutType }
+    });
+  } catch (err) {
+    toast.error(resolveApiError(err, '发起解析修复失败。'));
   } finally {
     actionPendingId.value = null;
   }
