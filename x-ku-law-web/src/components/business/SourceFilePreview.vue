@@ -76,6 +76,10 @@ const error = ref('');
 const previewUrl = ref('');
 const docxHost = ref<HTMLElement | null>(null);
 
+/** 内联样式不用 CSS 变量，避免 docx 节点上 var() 解析异常；中文优先走 Noto Serif SC。 */
+const DOCX_SERIF_BODY = '"Noto Serif SC", "Source Han Serif SC", "Source Serif 4", Georgia, serif';
+const DOCX_SERIF_DISPLAY = '"Noto Serif SC", "Instrument Serif", "Source Han Serif SC", serif';
+
 const displayName = computed(() => props.title || '法规源文件');
 const fallbackUrl = computed(() => props.sourceUrl || props.officialUrl || '');
 const sourceKey = computed(() => `${props.fileId || ''}|${fallbackUrl.value}`);
@@ -145,9 +149,32 @@ async function renderDocx(url: string) {
     inWrapper: true,
     ignoreWidth: true,
     ignoreHeight: false,
-    breakPages: true
+    breakPages: true,
+    ignoreFonts: true
   });
   harmonizeDocxStyles(docxHost.value);
+}
+
+function applyDocxTypography(host: HTMLElement) {
+  host.querySelectorAll<HTMLElement>('.docx, .docx *').forEach((el) => {
+    el.style.removeProperty('font-family');
+    el.style.setProperty('font-family', DOCX_SERIF_BODY, 'important');
+    el.style.setProperty('color', 'var(--ink-2)', 'important');
+  });
+  host.querySelectorAll<HTMLElement>('.docx p').forEach((el) => {
+    el.style.setProperty('font-size', '18px', 'important');
+    el.style.setProperty('line-height', '2.05', 'important');
+    el.style.setProperty('letter-spacing', '0.01em', 'important');
+  });
+  host.querySelectorAll<HTMLElement>('.docx p:first-child, .docx h1, .docx h2').forEach((el) => {
+    el.style.removeProperty('font-family');
+    el.style.setProperty('font-family', DOCX_SERIF_DISPLAY, 'important');
+    el.style.setProperty('font-size', '30px', 'important');
+    el.style.setProperty('line-height', '1.35', 'important');
+    el.style.setProperty('font-weight', '400', 'important');
+    el.style.setProperty('color', 'var(--ink)', 'important');
+    el.style.setProperty('letter-spacing', '-0.02em', 'important');
+  });
 }
 
 function harmonizeDocxStyles(host: HTMLElement) {
@@ -181,23 +208,7 @@ function harmonizeDocxStyles(host: HTMLElement) {
   });
 
   if (props.embedded) {
-    host.querySelectorAll<HTMLElement>('section.docx, section.docx *').forEach((el) => {
-      el.style.setProperty('font-family', 'var(--serif-body)', 'important');
-      el.style.setProperty('color', 'var(--ink-2)', 'important');
-    });
-    host.querySelectorAll<HTMLElement>('section.docx p').forEach((el) => {
-      el.style.setProperty('font-size', '18px', 'important');
-      el.style.setProperty('line-height', '2.05', 'important');
-      el.style.setProperty('letter-spacing', '0.01em', 'important');
-    });
-    host.querySelectorAll<HTMLElement>('section.docx p:first-child, section.docx h1, section.docx h2').forEach((el) => {
-      el.style.setProperty('font-family', 'var(--serif-display)', 'important');
-      el.style.setProperty('font-size', '30px', 'important');
-      el.style.setProperty('line-height', '1.35', 'important');
-      el.style.setProperty('font-weight', '400', 'important');
-      el.style.setProperty('color', 'var(--ink)', 'important');
-      el.style.setProperty('letter-spacing', '-0.02em', 'important');
-    });
+    applyDocxTypography(host);
   }
 
   const styleId = 'source-preview-docx-theme';
@@ -225,25 +236,37 @@ function harmonizeDocxStyles(host: HTMLElement) {
     .source-preview-docx section.docx > footer {
       background: transparent !important;
     }
-    .source-preview--embedded .source-preview-docx section.docx,
-    .source-preview--embedded .source-preview-docx section.docx * {
-      font-family: var(--serif-body) !important;
+    .source-preview--embedded .source-preview-docx .docx,
+    .source-preview--embedded .source-preview-docx .docx * {
+      font-family: ${DOCX_SERIF_BODY} !important;
       color: var(--ink-2) !important;
     }
-    .source-preview--embedded .source-preview-docx section.docx p {
+    .source-preview--embedded .source-preview-docx .docx p::before,
+    .source-preview--embedded .source-preview-docx .docx p::after {
+      font-family: ${DOCX_SERIF_BODY} !important;
+    }
+    .source-preview--embedded .source-preview-docx .docx p {
       font-size: 18px !important;
       line-height: 2.05 !important;
       letter-spacing: 0.01em !important;
     }
-    .source-preview--embedded .source-preview-docx section.docx p:first-child,
-    .source-preview--embedded .source-preview-docx section.docx h1,
-    .source-preview--embedded .source-preview-docx section.docx h2 {
-      font-family: var(--serif-display) !important;
+    .source-preview--embedded .source-preview-docx .docx p:first-child,
+    .source-preview--embedded .source-preview-docx .docx h1,
+    .source-preview--embedded .source-preview-docx .docx h2 {
+      font-family: ${DOCX_SERIF_DISPLAY} !important;
       font-size: 30px !important;
       line-height: 1.35 !important;
       font-weight: 400 !important;
       color: var(--ink) !important;
       letter-spacing: -0.02em !important;
+    }
+    .source-preview--embedded .source-preview-docx .docx p:first-child::before,
+    .source-preview--embedded .source-preview-docx .docx p:first-child::after,
+    .source-preview--embedded .source-preview-docx .docx h1::before,
+    .source-preview--embedded .source-preview-docx .docx h1::after,
+    .source-preview--embedded .source-preview-docx .docx h2::before,
+    .source-preview--embedded .source-preview-docx .docx h2::after {
+      font-family: ${DOCX_SERIF_DISPLAY} !important;
     }
   `;
   host.appendChild(style);
@@ -368,7 +391,34 @@ function openSource() {
 .source-preview--embedded .source-preview-docx :deep(section.docx) {
   margin: 0 auto 22px !important;
   padding: 0 6px !important;
-  font-family: var(--serif-body) !important;
+}
+
+.source-preview--embedded .source-preview-docx :deep(.docx),
+.source-preview--embedded .source-preview-docx :deep(.docx *) {
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Source Serif 4", Georgia, serif !important;
+  color: var(--ink-2) !important;
+}
+
+.source-preview--embedded .source-preview-docx :deep(.docx p::before),
+.source-preview--embedded .source-preview-docx :deep(.docx p::after) {
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Source Serif 4", Georgia, serif !important;
+}
+
+.source-preview--embedded .source-preview-docx :deep(.docx p) {
+  font-size: 18px !important;
+  line-height: 2.05 !important;
+  letter-spacing: 0.01em !important;
+}
+
+.source-preview--embedded .source-preview-docx :deep(.docx p:first-child),
+.source-preview--embedded .source-preview-docx :deep(.docx h1),
+.source-preview--embedded .source-preview-docx :deep(.docx h2) {
+  font-family: "Noto Serif SC", "Instrument Serif", "Source Han Serif SC", serif !important;
+  font-size: 30px !important;
+  line-height: 1.35 !important;
+  font-weight: 400 !important;
+  color: var(--ink) !important;
+  letter-spacing: -0.02em !important;
 }
 
 .source-preview-docx :deep(section.docx > article),
