@@ -20,6 +20,8 @@
   <a href="#架构设计"><strong>架构设计</strong></a>
   ·
   <a href="#接口入口"><strong>接口入口</strong></a>
+  ·
+  <a href="#社区与交流"><strong>社区与交流</strong></a>
 </p>
 
 <p align="center">
@@ -381,3 +383,21 @@ pnpm exec eslint .
 ## 开源协议
 
 本项目基于 [Apache License 2.0](LICENSE) 开源，详见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
+
+## 社区与交流
+
+欢迎加入 X-KU 社区，一起交流平台的建设与落地：
+
+- 使用中遇到问题，或想提出功能建议
+- 讨论法规数据源、条款解析、检索与 AI 问答的实践
+- 获取更多资料、部署指导和最佳实践
+- 结识更多的伙伴
+
+<p align="center">
+  <img src="docs/assets/zhishixingqiu.jpg" width="280" alt="X-KU 知识星球" />
+</p>
+
+<p align="center">
+  <strong>微信扫码加入 X-KU 星球</strong><br />
+  欢迎加入社区讨论、提问答疑、获取更多内容与指导。
+</p>
