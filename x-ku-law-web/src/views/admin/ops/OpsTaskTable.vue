@@ -34,23 +34,36 @@
           <span v-else-if="col.type === 'relation'">{{ relationCellLabel(row, col, value) }}</span>
         </template>
         <template v-if="hasRowActions" #actions="{ row }">
-          <XButton
-            v-if="retry && row[statusKey] === 'failed'"
-            size="small"
-            :loading="retryingId === row.id"
-            @click.stop="runRetry(row)"
-          >
-            重试
-          </XButton>
-          <XButton
-            v-else-if="action && row[statusKey] === actionStatus"
-            size="small"
-            :loading="actingId === row.id"
-            @click.stop="runAction(row)"
-          >
-            {{ actionLabel }}
-          </XButton>
-          <span v-else class="muted">—</span>
+          <div class="row-actions">
+            <XButton
+              v-if="retry && row[statusKey] === 'failed'"
+              size="small"
+              :loading="retryingId === row.id"
+              @click.stop="runRetry(row)"
+            >
+              重试
+            </XButton>
+            <template v-if="rowActions">
+              <XButton
+                v-for="rowAction in rowActionsFor(row)"
+                :key="rowAction.key"
+                size="small"
+                :variant="rowAction.variant || 'ghost'"
+                :disabled="rowAction.disabled || Boolean(actingActionKey)"
+                @click.stop="runRowAction(row, rowAction)"
+              >
+                {{ rowAction.label }}
+              </XButton>
+            </template>
+            <XButton
+              v-else-if="action && row[statusKey] === actionStatus"
+              size="small"
+              :loading="actingId === row.id"
+              @click.stop="runAction(row)"
+            >
+              {{ actionLabelFor(row) }}
+            </XButton>
+          </div>
         </template>
       </XTable>
       <XPagination :total="total" :page-no="pageNo" :page-size="pageSize" @change="onPageChange" />
@@ -95,8 +108,19 @@
           :loading="actingId === detailRow.id"
           @click="runAction(detailRow)"
         >
-          {{ actionLabel }}
+          {{ actionLabelFor(detailRow) }}
         </XButton>
+        <template v-if="rowActions && detailRow">
+          <XButton
+            v-for="rowAction in rowActionsFor(detailRow)"
+            :key="rowAction.key"
+            :variant="rowAction.variant || 'ghost'"
+            :disabled="rowAction.disabled || Boolean(actingActionKey)"
+            @click="runRowAction(detailRow, rowAction)"
+          >
+            {{ rowAction.label }}
+          </XButton>
+        </template>
         <XButton variant="ghost" @click="detailRow = null">关闭</XButton>
       </template>
     </XModal>
@@ -132,6 +156,15 @@ export interface OpsColumn {
 
 type Row = Record<string, unknown>;
 
+export interface OpsRowAction {
+  key: string;
+  label: string;
+  variant?: 'primary' | 'ghost' | 'danger';
+  disabled?: boolean;
+  run: (row: Row) => Promise<boolean | void> | boolean | void;
+  successMessage?: string | ((row: Row) => string);
+}
+
 const props = withDefaults(
   defineProps<{
     loader: (params: { status?: string; pageNo: number; pageSize: number }) => Promise<PageResult<any>>;
@@ -140,9 +173,11 @@ const props = withDefaults(
     statusOptions?: OptionItem[];
     retry?: (id: number) => Promise<boolean>;
     retryAll?: () => Promise<number>;
-    action?: (id: number) => Promise<boolean>;
-    actionLabel?: string;
+    action?: (id: number, row?: Row) => Promise<boolean>;
+    actionLabel?: string | ((row: Row) => string);
+    actionSuccessMessage?: string | ((row: Row) => string);
     actionStatus?: string;
+    rowActions?: (row: Row) => OpsRowAction[];
     detailFields?: OpsColumn[];
     lawLinkKey?: string;
     emptyTitle?: string;
@@ -171,9 +206,10 @@ const error = ref('');
 const retryingId = ref<number | null>(null);
 const retryingAll = ref(false);
 const actingId = ref<number | null>(null);
+const actingActionKey = ref('');
 const detailRow = ref<Row | null>(null);
 
-const hasRowActions = computed(() => Boolean(props.retry || props.action));
+const hasRowActions = computed(() => Boolean(props.retry || props.action || props.rowActions));
 
 const statusFilterOptions = computed<OptionItem[]>(() =>
   props.statusOptions.length ? [{ label: '全部', value: '' }, ...props.statusOptions] : []
@@ -194,6 +230,28 @@ function relationCellLabel(row: Row, col: OpsColumn, value: unknown) {
 
 function displayValue(value: unknown) {
   return labelOf(value);
+}
+
+function actionLabelFor(row: Row) {
+  return typeof props.actionLabel === 'function' ? props.actionLabel(row) : props.actionLabel;
+}
+
+function actionSuccessMessageFor(row: Row) {
+  if (typeof props.actionSuccessMessage === 'function') return props.actionSuccessMessage(row);
+  return props.actionSuccessMessage || `#${row.id} 已处理。`;
+}
+
+function rowActionsFor(row: Row) {
+  return props.rowActions ? props.rowActions(row) : [];
+}
+
+function actionKey(row: Row, action: OpsRowAction) {
+  return `${row.id || 'row'}:${action.key}`;
+}
+
+function rowActionSuccessMessageFor(row: Row, action: OpsRowAction) {
+  if (typeof action.successMessage === 'function') return action.successMessage(row);
+  return action.successMessage || '';
 }
 
 async function load(options?: { silent?: boolean }) {
@@ -300,9 +358,9 @@ async function runAction(row: Row) {
   const id = Number(row.id);
   actingId.value = id;
   try {
-    const ok = await props.action(id);
+    const ok = await props.action(id, row);
     if (ok) {
-      toast.success(`#${id} 已处理。`);
+      toast.success(actionSuccessMessageFor(row));
       detailRow.value = null;
       reload(true);
     } else {
@@ -314,6 +372,24 @@ async function runAction(row: Row) {
     toast.error(resolveApiError(err, '操作失败。'));
   } finally {
     actingId.value = null;
+  }
+}
+
+async function runRowAction(row: Row, action: OpsRowAction) {
+  const key = actionKey(row, action);
+  actingActionKey.value = key;
+  try {
+    const ok = await action.run(row);
+    if (ok !== false) {
+      const message = rowActionSuccessMessageFor(row, action);
+      if (message) toast.success(message);
+      detailRow.value = null;
+      reload(true);
+    }
+  } catch (err) {
+    toast.error(resolveApiError(err, '操作失败。'));
+  } finally {
+    actingActionKey.value = '';
   }
 }
 
@@ -341,6 +417,13 @@ onMounted(load);
 
 .muted {
   color: var(--muted);
+}
+
+.row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .cell-time {

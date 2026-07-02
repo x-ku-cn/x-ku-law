@@ -342,5 +342,5 @@ export function previewParseRepair(payload: ParseRepairPreviewRequest) {
 }
 
 export function saveParseRepairBlocks(bizType: string, bizId: number | string, payload: ParseRepairSaveRequest) {
-  return unwrap<unknown>(http.put(`/ops/parse-repair/targets/${bizType}/${bizId}/blocks`, payload));
+  return unwrap<unknown>(http.put(`/ops/parse-repair/targets/${bizType}/${bizId}/blocks`, payload, { timeout: 120000 }));
 }

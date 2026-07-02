@@ -3,10 +3,13 @@ package cn.xku.law.law.mapper;
 import cn.xku.law.law.domain.LawArticleDO;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Delete;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
+
+import java.util.List;
 
 /** lr_law_article 数据访问层 */
 @Mapper
@@ -19,6 +22,25 @@ public interface LawArticleMapper extends BaseMapper<LawArticleDO> {
      */
     @Delete("DELETE FROM lr_law_article WHERE version_id = #{versionId}")
     int physicalDeleteByVersion(@Param("versionId") Long versionId);
+
+    @Options(useGeneratedKeys = true, keyProperty = "articles.id")
+    @Insert("""
+            <script>
+            INSERT INTO lr_law_article
+            (document_id, version_id, parent_article_id, article_no, article_title,
+             chapter_no, chapter_title, section_no, section_title, article_order, article_level,
+             content_text, content_hash, obligation_flag, penalty_flag, status,
+             creator, create_time, updater, update_time, deleted, tenant_id)
+            VALUES
+            <foreach collection="articles" item="item" separator=",">
+              (#{item.documentId}, #{item.versionId}, #{item.parentArticleId}, #{item.articleNo}, #{item.articleTitle},
+               #{item.chapterNo}, #{item.chapterTitle}, #{item.sectionNo}, #{item.sectionTitle}, #{item.articleOrder}, #{item.articleLevel},
+               #{item.contentText}, #{item.contentHash}, #{item.obligationFlag}, #{item.penaltyFlag}, #{item.status},
+               '', NOW(), '', NOW(), b'0', 0)
+            </foreach>
+            </script>
+            """)
+    int insertBatch(@Param("articles") List<LawArticleDO> articles);
 
     /**
      * 只更新单条的章/节归属列（存量回填用）。刻意仅触碰 chapter_no/chapter_title/section_no/section_title

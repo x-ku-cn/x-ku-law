@@ -146,7 +146,8 @@ function openIssue(issue: ParseRepairIssue) {
       repairIssueId: issue.id,
       qualityIssueId: issue.qualityIssueId,
       parserType: issue.parserType,
-      layoutType: issue.layoutType
+      layoutType: issue.layoutType,
+      issueDesc: issue.reason || issue.issueDesc || ''
     }
   });
 }

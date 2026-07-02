@@ -58,7 +58,7 @@
           </dl>
           <div class="meta-box">
             <span class="mono">{{ document.documentNo || '暂无文号' }}</span>
-            <StatusBadge :value="document.timelinessStatus || document.status" />
+            <StatusBadge :value="document.status" />
             <span class="mono">公布 {{ document.publishDate || '未标注' }}</span>
             <span class="mono">施行 {{ document.effectiveDate || '未标注' }}</span>
             <label v-if="versionOptions.length > 1" class="version-pick">
@@ -330,7 +330,7 @@ const metaChips = computed(() => {
   return [
     labelOf(d.lawType),
     labelOf(d.legalLevel),
-    labelOf(d.timelinessStatus || d.status),
+    labelOf(d.status),
     d.issuingOrg
   ].filter((t) => t && t !== '—');
 });

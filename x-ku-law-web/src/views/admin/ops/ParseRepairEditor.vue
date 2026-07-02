@@ -4,7 +4,7 @@
       <div>
         <div class="section-kicker">§ Parse Repair</div>
         <h1>{{ detail?.bizTitle || '内容解析修复' }}</h1>
-        <p>左侧保留原文，右侧维护结构块。普通法规按条款编辑；决定类文档使用独立段落/修改项版式。</p>
+        <p>左侧保留原文，右侧维护结构块。保存后会补跑检索索引、向量同步、元数据富化与 AI 解读。</p>
       </div>
       <div class="head-actions">
         <XButton @click="router.back()">返回</XButton>
@@ -19,6 +19,15 @@
         <XChip tone="accent">{{ parserLabel(parserType) }}</XChip>
         <XChip tone="outline">{{ layoutLabel(detail.layoutType) }}</XChip>
         <span class="mono">对象 ID {{ detail.bizId }}</span>
+      </section>
+
+      <section v-if="repairIssueDesc || repairGuidance" class="repair-guidance">
+        <div>
+          <div class="section-kicker">§ Repair Hint</div>
+          <h2>{{ issueTitle }}</h2>
+          <p v-if="repairIssueDesc">{{ repairIssueDesc }}</p>
+          <p v-if="repairGuidance" class="guidance-text">{{ repairGuidance }}</p>
+        </div>
       </section>
 
       <section class="editor-toolbar">
@@ -66,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ParsedBlockEditor from '@/components/business/ParsedBlockEditor.vue';
 import PageState from '@/components/common/PageState.vue';
@@ -95,6 +104,26 @@ const saving = ref(false);
 const previewing = ref(false);
 const selectedText = ref('');
 const sourceRef = ref<HTMLTextAreaElement | null>(null);
+
+const issueType = computed(() => String(route.query.issueType || ''));
+const repairIssueDesc = computed(() => String(route.query.issueDesc || ''));
+const issueTitle = computed(() => {
+  if (issueType.value === 'chapter_backfill_skip') return '章节回填疑点';
+  if (issueType.value === 'parse_error') return '条款解析失败';
+  return '待人工复核的问题';
+});
+const repairGuidance = computed(() => {
+  if (issueType.value === 'chapter_backfill_skip') {
+    return '系统重解析出的条款与当前库内条款无法逐字匹配，章节/节信息没有自动写入。请优先检查被标记的条款编号、正文是否与原文一致，必要时重新预览后调整结构块。';
+  }
+  if (issueType.value === 'parse_error') {
+    return '系统没有识别出“第X条”结构，当前可能退化为单条全文。请先点“重新预览”，如果仍不能拆分，再从左侧原文选择正确条款生成结构块。';
+  }
+  if (repairIssueDesc.value) {
+    return '请根据问题描述核对左侧原文与右侧结构块，修正后保存。';
+  }
+  return '';
+});
 
 const parserTypeOptions = [
   { label: '法规条款', value: 'law_article' },
@@ -175,12 +204,19 @@ async function save() {
       blocks: blocks.value
     });
     toast.success('解析修复已保存。');
-    router.push({ name: 'admin.ops.parseRepair' });
+    router.push(saveReturnTo());
   } catch (err) {
     toast.error(resolveApiError(err, '保存解析修复失败'));
   } finally {
     saving.value = false;
   }
+}
+
+function saveReturnTo() {
+  if (route.query.returnTo === 'governance') {
+    return { name: 'admin.ops.governance' };
+  }
+  return { name: 'admin.ops.parseRepair' };
 }
 
 function bizLabel(type?: string) {
@@ -237,6 +273,35 @@ function layoutLabel(type?: string) {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.repair-guidance {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--amber, #b45309) 38%, var(--rule));
+  background: color-mix(in srgb, var(--amber-soft, #fff7ed) 42%, var(--paper));
+}
+
+.repair-guidance h2 {
+  margin: 4px 0 6px;
+  font-family: var(--serif-display);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.repair-guidance p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.repair-guidance .guidance-text {
+  margin-top: 4px;
+  color: var(--ink-3);
 }
 
 .editor-toolbar {

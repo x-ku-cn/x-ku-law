@@ -19,9 +19,9 @@ const visible = computed(() => {
 
 const tone = computed(() => {
   const value = raw.value.toLowerCase();
-  if (['effective', 'current', 'enabled', 'published', 'pass', 'done', 'success', 'read'].includes(value)) return 'moss';
-  if (value.includes('有效') || value.includes('启用') || value.includes('通过') || value.includes('完成')) return 'moss';
-  if (['amended', 'pending', 'auditing', 'processing', 'running', 'draft'].includes(value)) return 'gold';
+  if (['effective', 'current', 'enabled', 'published', 'pass', 'done', 'success', 'read', 'resolved'].includes(value)) return 'moss';
+  if (value.includes('有效') || value.includes('启用') || value.includes('通过') || value.includes('完成') || value.includes('已处理') || value.includes('已解决')) return 'moss';
+  if (['amended', 'open', 'pending', 'auditing', 'processing', 'running', 'draft'].includes(value)) return 'gold';
   if (value.includes('修订') || value.includes('待') || value.includes('进行') || value.includes('审核')) return 'gold';
   if (['expired', 'repealed', 'failed', 'reject', 'rejected', 'offline', 'disabled'].includes(value)) return 'rose';
   if (value.includes('失效') || value.includes('废止') || value.includes('失败') || value.includes('驳回')) return 'rose';

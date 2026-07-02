@@ -1,6 +1,6 @@
 import type { MatrixNode } from '@/components/editorial/ResultLevelMatrix.vue';
 import type { LawSearchResult, MatrixBucket } from '@/types/law';
-import { labelOf, matrixExcludedLevels, matrixLevelOrder } from '@/utils/labels';
+import { matrixExcludedLevels, matrixLevelOf, matrixLevelOrder } from '@/utils/labels';
 
 // 层级顺序与排除项的唯一来源在 labels.ts（与 effectLevel 词表同处），此处仅消费。
 const LEVEL_ORDER = matrixLevelOrder;
@@ -11,7 +11,7 @@ export function buildSearchMatrix(items: LawSearchResult[], years: number[]) {
   const levels = [...LEVEL_ORDER];
 
   for (const item of items) {
-    const level = labelOf(item.effectLevel) || '其他';
+    const level = matrixLevelOf(item.effectLevel) || '其他';
     if (!levels.includes(level)) levels.push(level);
     const year = parseYear(item.effectiveDate);
     if (!year) continue;
@@ -30,7 +30,7 @@ export function buildMatrixFromBuckets(serverBuckets: MatrixBucket[], years: num
   const levels = [...LEVEL_ORDER];
 
   for (const bucket of serverBuckets) {
-    const level = labelOf(bucket.effectLevel) || '其他';
+    const level = matrixLevelOf(bucket.effectLevel) || '其他';
     if (!levels.includes(level)) levels.push(level);
     if (!bucket.year) continue;
     buckets.set(`${level}|${bucket.year}`, (buckets.get(`${level}|${bucket.year}`) || 0) + bucket.count);

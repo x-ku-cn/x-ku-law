@@ -589,11 +589,14 @@ public class OpsServiceImpl implements OpsService {
         enqueueVectorDeletesForExistingSegments(bizId);
         lawArticleSegmentMapper.physicalDeleteByVersion(bizId);
         lawArticleMapper.physicalDeleteByVersion(bizId);
+        List<LawArticleDO> articles = new ArrayList<>(blocks.size());
         for (int i = 0; i < blocks.size(); i++) {
             ParsedBlockDraft block = blocks.get(i);
-            LawArticleDO article = toLawArticle(version, block, i + 1, parserType);
-            lawArticleMapper.insert(article);
-            createSegments(article.getVersionId(), article.getId(), article.getContentText());
+            articles.add(toLawArticle(version, block, i + 1, parserType));
+        }
+        if (!articles.isEmpty()) {
+            lawArticleMapper.insertBatch(articles);
+            lawArticleSegmentMapper.insertBatch(createSegments(articles));
         }
 
         closeRepairIssue(request.getRepairIssueId());
@@ -899,9 +902,18 @@ public class OpsServiceImpl implements OpsService {
         return article;
     }
 
-    private void createSegments(Long versionId, Long articleId, String content) {
+    private List<LawArticleSegmentDO> createSegments(List<LawArticleDO> articles) {
+        List<LawArticleSegmentDO> segments = new ArrayList<>();
+        for (LawArticleDO article : articles) {
+            segments.addAll(createSegments(article.getVersionId(), article.getId(), article.getContentText()));
+        }
+        return segments;
+    }
+
+    private List<LawArticleSegmentDO> createSegments(Long versionId, Long articleId, String content) {
         int maxChars = env.getProperty("app.process.segment-max-chars", Integer.class, 1000);
         List<String> chunks = splitByLength(content, maxChars);
+        List<LawArticleSegmentDO> segments = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
             String chunk = chunks.get(i);
             LawArticleSegmentDO segment = new LawArticleSegmentDO();
@@ -912,8 +924,9 @@ public class OpsServiceImpl implements OpsService {
             segment.setSegmentHash(sha256(chunk));
             segment.setTokenCount(chunk.length());
             segment.setEmbeddingStatus("pending");
-            lawArticleSegmentMapper.insert(segment);
+            segments.add(segment);
         }
+        return segments;
     }
 
     private List<String> splitByLength(String text, int maxChars) {
@@ -966,6 +979,7 @@ public class OpsServiceImpl implements OpsService {
     }
 
     private void enqueueRepairSync(Long versionId) {
+        LawVersionDO version = lawVersionMapper.selectById(versionId);
         SearchIndexTaskDO indexTask = new SearchIndexTaskDO();
         indexTask.setRefType("law_version");
         indexTask.setRefId(versionId);
@@ -983,6 +997,43 @@ public class OpsServiceImpl implements OpsService {
         vectorTask.setVectorIndex(env.getProperty("app.vector.index-name", "law_segment"));
         vectorTask.setRetryCount(0);
         vectorTaskMapper.insert(vectorTask);
+
+        enqueueRepairAiTask(version);
+    }
+
+    private void enqueueRepairAiTask(LawVersionDO version) {
+        if (version == null || version.getId() == null) {
+            return;
+        }
+        LawAiTaskDO existing = aiTaskMapper.selectOne(new LambdaQueryWrapper<LawAiTaskDO>()
+                .eq(LawAiTaskDO::getVersionId, version.getId())
+                .last("LIMIT 1"));
+        if (existing != null) {
+            if ("processing".equals(existing.getProcessStatus())) {
+                log.info("[ParseRepair] versionId={} already has processing AI task, skip enqueue", version.getId());
+                return;
+            }
+            LambdaUpdateWrapper<LawAiTaskDO> update = new LambdaUpdateWrapper<LawAiTaskDO>()
+                    .eq(LawAiTaskDO::getId, existing.getId())
+                    .ne(LawAiTaskDO::getProcessStatus, "processing")
+                    .set(LawAiTaskDO::getDocumentId, version.getDocumentId())
+                    .set(LawAiTaskDO::getFileId, version.getFileId())
+                    .set(LawAiTaskDO::getProcessStatus, "pending")
+                    .set(LawAiTaskDO::getRetryCount, 0)
+                    .set(LawAiTaskDO::getErrorMessage, null)
+                    .set(LawAiTaskDO::getStartedAt, null)
+                    .set(LawAiTaskDO::getFinishedAt, null);
+            aiTaskMapper.update(null, update);
+            return;
+        }
+
+        LawAiTaskDO task = new LawAiTaskDO();
+        task.setDocumentId(version.getDocumentId());
+        task.setVersionId(version.getId());
+        task.setFileId(version.getFileId());
+        task.setProcessStatus("pending");
+        task.setRetryCount(0);
+        aiTaskMapper.insert(task);
     }
 
     private static String firstText(String... values) {

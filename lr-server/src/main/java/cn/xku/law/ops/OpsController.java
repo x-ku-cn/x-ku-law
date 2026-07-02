@@ -372,7 +372,6 @@ public class OpsController {
 
     @Operation(summary = "保存内容解析修复结果")
     @PreAuthorize("hasAuthority('system:ops:audit')")
-    @OperLog(module = "解析修复", type = "update")
     @PutMapping("/parse-repair/targets/{bizType}/{bizId}/blocks")
     public CommonResult<?> saveParseRepairBlocks(
             @PathVariable String bizType,

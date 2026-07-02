@@ -21,8 +21,7 @@
       :status-options="statusOptions"
       :retry="retryFn"
       :retry-all="retryAllFn"
-      :action="actionFn"
-      :action-label="actionLabel"
+      :row-actions="rowActions"
       action-status="open"
       :empty-title="emptyTitle"
       empty-description="管线运行后，相关记录会出现在这里。"
@@ -32,11 +31,15 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import OpsTaskTable, { type OpsColumn } from './OpsTaskTable.vue';
+import { useRouter } from 'vue-router';
+import OpsTaskTable, { type OpsColumn, type OpsRowAction } from './OpsTaskTable.vue';
 import {
+  createParseRepairIssue,
   getAlertDeliveries,
   getAuditRecords,
+  getParseRepairTarget,
   getQualityIssues,
+  type QualityIssue,
   resolveQualityIssue,
   retryAlertDelivery,
   retryAllAlertDeliveries
@@ -46,6 +49,7 @@ type Tab = 'quality' | 'audit' | 'alert';
 
 const tab = ref<Tab>('quality');
 const tableRef = ref<InstanceType<typeof OpsTaskTable> | null>(null);
+const router = useRouter();
 
 const qualityStatus = [
   { label: '待处理', value: 'open' },
@@ -110,8 +114,7 @@ const statusOptions = computed(() => {
 });
 const retryFn = computed(() => (tab.value === 'alert' ? retryAlertDelivery : undefined));
 const retryAllFn = computed(() => (tab.value === 'alert' ? retryAllAlertDeliveries : undefined));
-const actionFn = computed(() => (tab.value === 'quality' ? resolveQualityIssue : undefined));
-const actionLabel = computed(() => (tab.value === 'quality' ? '标记解决' : '处理'));
+const rowActions = computed(() => (tab.value === 'quality' ? qualityRowActions : undefined));
 const emptyTitle = computed(() => {
   if (tab.value === 'audit') return '暂无审核留痕';
   if (tab.value === 'alert') return '暂无预警投递';
@@ -122,6 +125,90 @@ function switchTab(next: Tab) {
   if (tab.value === next) return;
   tab.value = next;
   void nextTick(() => tableRef.value?.reloadFirst());
+}
+
+function isParseRepairableIssue(row: Record<string, unknown>) {
+  const issue = row as unknown as QualityIssue;
+  if (issue.status !== 'open' || issue.refType !== 'law_version' || !issue.refId) {
+    return false;
+  }
+  return ['parse_error', 'chapter_backfill_skip'].includes(issue.issueType || '');
+}
+
+function isLawVersionIssue(row: Record<string, unknown>) {
+  const issue = row as unknown as QualityIssue;
+  return issue.refType === 'law_version' && Boolean(issue.refId);
+}
+
+function qualityRowActions(row: Record<string, unknown>): OpsRowAction[] {
+  const issue = row as unknown as QualityIssue;
+  const actions: OpsRowAction[] = [];
+  if (isParseRepairableIssue(row)) {
+    actions.push({
+      key: 'repair',
+      label: '修复',
+      variant: 'primary',
+      run: () => openParseRepair(issue)
+    });
+  } else if (issue.status !== 'open' && isLawVersionIssue(row)) {
+    actions.push({
+      key: 'repair-again',
+      label: '更新',
+      run: () => openParseRepair(issue)
+    });
+  }
+
+  if (issue.status === 'open') {
+    actions.push({
+      key: 'resolve',
+      label: '标记解决',
+      run: async () => resolveQualityIssue(issue.id),
+      successMessage: `#${issue.id} 已处理。`
+    });
+  } else if (isLawVersionIssue(row)) {
+    actions.push({
+      key: 'detail',
+      label: '查看详情',
+      run: () => openLawVersionDetail(issue)
+    });
+  }
+  return actions;
+}
+
+async function openParseRepair(issue: QualityIssue) {
+  const repairIssue = await createParseRepairIssue({
+    bizType: 'law_version',
+    bizId: Number(issue.refId),
+    source: 'quality_issue',
+    reason: issue.issueDesc || '数据治理发现质量问题，需人工修复。',
+    qualityIssueId: issue.id
+  });
+  await router.push({
+    name: 'admin.ops.parseRepairEditor',
+    params: { bizType: repairIssue.bizType, bizId: repairIssue.bizId },
+    query: {
+      repairIssueId: repairIssue.id,
+      qualityIssueId: repairIssue.qualityIssueId,
+      parserType: repairIssue.parserType,
+      layoutType: repairIssue.layoutType,
+      issueType: issue.issueType || '',
+      issueDesc: issue.issueDesc || '',
+      returnTo: 'governance'
+    }
+  });
+}
+
+async function openLawVersionDetail(issue: QualityIssue) {
+  const target = await getParseRepairTarget('law_version', Number(issue.refId));
+  const documentId = target.metadata?.documentId;
+  if (!documentId) {
+    throw new Error('未找到关联法规文档。');
+  }
+  await router.push({
+    name: 'law.detail',
+    params: { documentId: String(documentId) },
+    query: { v: String(issue.refId) }
+  });
 }
 </script>
 

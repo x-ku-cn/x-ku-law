@@ -20,6 +20,7 @@ declare module 'docx-preview' {
     inWrapper?: boolean;
     ignoreWidth?: boolean;
     ignoreHeight?: boolean;
+    ignoreFonts?: boolean;
     breakPages?: boolean;
   }
 
